@@ -1,0 +1,13 @@
+{
+  "domain": "myopel",
+  "name": "MyOpel",
+  "version": "1.0.0",
+  "documentation": "https://github.com/yourusername/myopel-ha",
+  "issue_tracker": "https://github.com/yourusername/myopel-ha/issues",
+  "requirements": [],
+  "dependencies": ["http"],
+  "codeowners": [],
+  "iot_class": "local_polling",
+  "config_flow": true,
+  "homeassistant": "2024.1.0"
+}

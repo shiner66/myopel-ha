@@ -1,0 +1,56 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Cartella file MyOpel",
+        "description": "Inserisci il percorso della cartella dove salvare i file .myop.\nVerrà creata automaticamente se non esiste.\nEsempio: {example}",
+        "data": {
+          "file_path": "Percorso cartella"
+        }
+      },
+      "imap": {
+        "title": "Scarica automaticamente via email (opzionale)",
+        "description": "Configura un account email IMAP per scaricare automaticamente i file .myop allegati.\nLascia il server vuoto per saltare e caricare i file manualmente.",
+        "data": {
+          "imap_server": "Server IMAP (es. imap.gmail.com) — lascia vuoto per saltare",
+          "imap_port": "Porta (default 993)",
+          "imap_username": "Indirizzo email",
+          "imap_password": "Password / App password",
+          "imap_folder": "Cartella IMAP (default INBOX)",
+          "imap_sender": "Filtra mittente (opzionale, es. myopel@stellantis.com)",
+          "imap_interval": "Intervallo controllo email (secondi)"
+        }
+      }
+    },
+    "error": {
+      "not_a_directory": "Il percorso non punta a una cartella.",
+      "invalid_json": "Il file .myop trovato non è JSON valido.",
+      "invalid_format": "Il file .myop trovato non è un export MyOpel valido.",
+      "imap_cannot_connect": "Impossibile connettersi al server IMAP. Controlla server e porta.",
+      "imap_auth_failed": "Credenziali IMAP non valide. Controlla email e password.",
+      "imap_folder_not_found": "Cartella IMAP non trovata."
+    },
+    "abort": {
+      "already_configured": "Questo veicolo è già configurato."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Opzioni MyOpel",
+        "data": {
+          "scan_interval": "Intervallo lettura file (secondi)",
+          "min_trip_distance_enabled": "Ignora viaggi corti come ultimo viaggio",
+          "min_trip_distance": "Distanza minima ultimo viaggio (km)",
+          "imap_server": "Server IMAP",
+          "imap_port": "Porta IMAP",
+          "imap_username": "Indirizzo email",
+          "imap_password": "Password / App password",
+          "imap_folder": "Cartella IMAP",
+          "imap_sender": "Filtra mittente",
+          "imap_interval": "Intervallo controllo email (secondi)"
+        }
+      }
+    }
+  }
+}

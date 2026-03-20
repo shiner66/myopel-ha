@@ -501,13 +501,16 @@ class MyOpelCard extends LitElement {
   // ── Leaflet map lifecycle ─────────────────────────────────────────────────
   async _ensureLeaflet() {
     if (window.L) return true;
-    // Inject Leaflet CSS once
-    if (!document.querySelector('#leaflet-css')) {
-      const link = document.createElement('link');
-      link.id = 'leaflet-css';
-      link.rel = 'stylesheet';
-      link.href = 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css';
-      document.head.appendChild(link);
+    // Inject Leaflet CSS into document head (must be main document, not shadow root)
+    if (!document.querySelector('#myopel-leaflet-css')) {
+      await new Promise(res => {
+        const link = document.createElement('link');
+        link.id = 'myopel-leaflet-css';
+        link.rel = 'stylesheet';
+        link.href = 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css';
+        link.onload = res;
+        document.head.appendChild(link);
+      });
     }
     // Load Leaflet JS
     await new Promise((res, rej) => {
@@ -522,8 +525,10 @@ class MyOpelCard extends LitElement {
   updated(changed) {
     super.updated && super.updated(changed);
     if (!this._config?.plate) return;
-    // Small delay to let DOM render the canvas div
-    requestAnimationFrame(() => this._initOrUpdateLeaflet());
+    // Two rAF: first lets Lit commit to DOM, second lets layout settle
+    requestAnimationFrame(() =>
+      requestAnimationFrame(() => this._initOrUpdateLeaflet())
+    );
   }
 
   async _initOrUpdateLeaflet() {
@@ -541,8 +546,11 @@ class MyOpelCard extends LitElement {
     const el = this.shadowRoot?.querySelector('.op-map-canvas');
     if (!el) return;
 
+    // Leaflet needs the container to have explicit px dimensions in shadow DOM
+    el.style.height = '150px';
+    el.style.width = '100%';
+
     if (!this._leafletMap) {
-      // Init map
       const map = L.map(el, {
         zoomControl: false,
         attributionControl: false,
@@ -551,37 +559,49 @@ class MyOpelCard extends LitElement {
         doubleClickZoom: false,
         touchZoom: false,
         keyboard: false,
+        fadeAnimation: false,   // avoids ghosting on first load
+        markerZoomAnimation: false,
       });
 
-      // CartoDB Dark Matter — no API key needed
-      L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
-        maxZoom: 19,
-        subdomains: 'abcd',
-      }).addTo(map);
+      // CartoDB Dark Matter — no API key, HTTPS, works globally
+      L.tileLayer(
+        'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png',
+        { maxZoom: 19, subdomains: 'abcd', crossOrigin: true }
+      ).addTo(map);
 
-      // Custom SVG marker — Opel red pin
+      // Red Opel pin with glow
       const icon = L.divIcon({
         className: '',
-        html: `<svg width="32" height="42" viewBox="0 0 32 42" xmlns="http://www.w3.org/2000/svg">
-          <filter id="sh">
-            <feDropShadow dx="0" dy="2" stdDeviation="2" flood-color="rgba(0,0,0,0.5)"/>
-          </filter>
-          <path d="M16 2C9.373 2 4 7.373 4 14c0 9 12 26 12 26S28 23 28 14C28 7.373 22.627 2 16 2z"
-            fill="#e3001b" filter="url(#sh)"/>
-          <circle cx="16" cy="14" r="5" fill="white" opacity="0.9"/>
+        html: `<svg width="34" height="44" viewBox="0 0 34 44" xmlns="http://www.w3.org/2000/svg">
+          <defs>
+            <filter id="opel-glow" x="-40%" y="-40%" width="180%" height="180%">
+              <feDropShadow dx="0" dy="2" stdDeviation="3" flood-color="rgba(0,0,0,0.6)"/>
+              <feDropShadow dx="0" dy="0" stdDeviation="4" flood-color="rgba(227,0,27,0.5)" result="glow"/>
+            </filter>
+          </defs>
+          <path d="M17 2C9.82 2 4 7.82 4 15c0 9.5 13 27 13 27S30 24.5 30 15C30 7.82 24.18 2 17 2z"
+                fill="#e3001b" filter="url(#opel-glow)"/>
+          <circle cx="17" cy="15" r="5.5" fill="white"/>
+          <circle cx="17" cy="15" r="3" fill="#e3001b"/>
         </svg>`,
-        iconSize: [32, 42],
-        iconAnchor: [16, 42],
-        popupAnchor: [0, -42],
+        iconSize: [34, 44],
+        iconAnchor: [17, 44],
       });
 
       this._leafletMarker = L.marker([lat, lon], { icon }).addTo(map);
       map.setView([lat, lon], 15);
       this._leafletMap = map;
+
+      // Critical: tell Leaflet to recalculate container size after shadow DOM layout
+      setTimeout(() => {
+        map.invalidateSize({ animate: false });
+        map.setView([lat, lon], 15);
+      }, 100);
+
     } else {
-      // Update existing map
       this._leafletMarker?.setLatLng([lat, lon]);
-      this._leafletMap.setView([lat, lon]);
+      this._leafletMap.setView([lat, lon], 15);
+      this._leafletMap.invalidateSize({ animate: false });
     }
   }
 

@@ -114,14 +114,10 @@ def _fetch_myop_attachments(config: dict, save_folder: str) -> list[str]:
 
                 payload = part.get_payload(decode=True)
                 if payload:
-                    # Skip if an identical filename already exists in the folder
-                    if dest.exists():
-                        _LOGGER.debug("MyOpel IMAP: %s già presente, salto", safe_name)
-                        continue
                     dest.write_bytes(payload)
                     saved.append(str(dest))
                     found_attachment = True
-                    _LOGGER.info("MyOpel IMAP: saved attachment → %s", dest)
+                    _LOGGER.info("MyOpel IMAP: salvato allegato → %s", dest)
 
             if found_attachment:
                 # Mark as read only if we actually saved something

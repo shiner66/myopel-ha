@@ -260,18 +260,13 @@ class MyOpelCard extends LitElement {
     .op-bar-fill.warn { background: var(--op-yellow); }
     .op-bar-fill.crit { background: var(--op-red); box-shadow: 0 0 8px rgba(227,0,27,0.4); }
 
-    /* ── Mini map (Leaflet) ── */
+    /* ── Mini map (Leaflet via iframe) ── */
     .op-map-wrap {
       margin: 12px 16px 0;
       border-radius: 12px;
       overflow: hidden;
       border: 1px solid var(--op-border);
-      background: #1a1a2e;
-    }
-    .op-map-canvas {
-      height: 150px;
-      width: 100%;
-      display: block;
+      background: #111;
     }
     .op-map-footer {
       padding: 8px 12px;
@@ -287,7 +282,7 @@ class MyOpelCard extends LitElement {
       text-align: right; line-height: 1.4;
     }
     .op-map-unavail {
-      height: 120px; display: flex; align-items: center; justify-content: center;
+      height: 150px; display: flex; align-items: center; justify-content: center;
       font-size: 12px; color: var(--op-muted);
     }
 
@@ -498,40 +493,71 @@ class MyOpelCard extends LitElement {
     `;
   }
 
-  // ── Leaflet map lifecycle ─────────────────────────────────────────────────
-  async _ensureLeaflet() {
-    if (window.L) return true;
-    // Inject Leaflet CSS into document head (must be main document, not shadow root)
-    if (!document.querySelector('#myopel-leaflet-css')) {
-      await new Promise(res => {
-        const link = document.createElement('link');
-        link.id = 'myopel-leaflet-css';
-        link.rel = 'stylesheet';
-        link.href = 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css';
-        link.onload = res;
-        document.head.appendChild(link);
-      });
+  // ── Leaflet map via iframe (bypass shadow DOM limitations) ───────────────
+  _getMapHtml(lat, lon) {
+    return `<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  * { margin:0; padding:0; box-sizing:border-box; }
+  html, body, #map { width:100%; height:100%; background:#111; }
+  .leaflet-container { background:#111 !important; }
+  /* hide Leaflet default attribution */
+  .leaflet-control-attribution { display:none !important; }
+</style>
+<link rel="stylesheet"
+  href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
+</head>
+<body>
+<div id="map"></div>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"><\/script>
+<script>
+  var map = L.map('map', {
+    zoomControl: false, attributionControl: false,
+    dragging: false, scrollWheelZoom: false,
+    doubleClickZoom: false, touchZoom: false, keyboard: false
+  });
+
+  L.tileLayer(
+    'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png',
+    { maxZoom: 19, subdomains: 'abcd' }
+  ).addTo(map);
+
+  var pinSvg = '<svg width="34" height="44" viewBox="0 0 34 44" xmlns="http://www.w3.org/2000/svg">'
+    + '<defs><filter id="g"><feDropShadow dx="0" dy="2" stdDeviation="3" flood-color="rgba(0,0,0,.6)"/>'
+    + '<feDropShadow dx="0" dy="0" stdDeviation="5" flood-color="rgba(227,0,27,.45)"/></filter></defs>'
+    + '<path d="M17 2C9.82 2 4 7.82 4 15c0 9.5 13 27 13 27S30 24.5 30 15C30 7.82 24.18 2 17 2z"'
+    + ' fill="#e3001b" filter="url(#g)"/>'
+    + '<circle cx="17" cy="15" r="6" fill="white"/>'
+    + '<circle cx="17" cy="15" r="3" fill="#e3001b"/></svg>';
+
+  var icon = L.divIcon({
+    className: '', html: pinSvg,
+    iconSize: [34, 44], iconAnchor: [17, 44]
+  });
+
+  var lat = ${lat}, lon = ${lon};
+  var marker = L.marker([lat, lon], { icon: icon }).addTo(map);
+  map.setView([lat, lon], 15);
+
+  // Listen for position updates from parent card
+  window.addEventListener('message', function(e) {
+    if (e.data && e.data.type === 'myopel-update') {
+      var newLat = e.data.lat, newLon = e.data.lon;
+      marker.setLatLng([newLat, newLon]);
+      map.setView([newLat, newLon], 15);
     }
-    // Load Leaflet JS
-    await new Promise((res, rej) => {
-      const s = document.createElement('script');
-      s.src = 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js';
-      s.onload = res; s.onerror = rej;
-      document.head.appendChild(s);
-    });
-    return !!window.L;
+  });
+<\/script>
+</body>
+</html>`;
   }
 
   updated(changed) {
     super.updated && super.updated(changed);
     if (!this._config?.plate) return;
-    // Two rAF: first lets Lit commit to DOM, second lets layout settle
-    requestAnimationFrame(() =>
-      requestAnimationFrame(() => this._initOrUpdateLeaflet())
-    );
-  }
 
-  async _initOrUpdateLeaflet() {
     const plate = this._uniprefix();
     if (!plate) return;
     const tracker = this._hass?.states[`device_tracker.auto_${plate}`];
@@ -539,69 +565,20 @@ class MyOpelCard extends LitElement {
     const lon = tracker?.attributes?.longitude;
     if (!lat || !lon) return;
 
-    const ok = await this._ensureLeaflet();
-    if (!ok) return;
-    const L = window.L;
+    const iframe = this.shadowRoot?.querySelector('.op-map-iframe');
+    if (!iframe) return;
 
-    const el = this.shadowRoot?.querySelector('.op-map-canvas');
-    if (!el) return;
-
-    // Leaflet needs the container to have explicit px dimensions in shadow DOM
-    el.style.height = '150px';
-    el.style.width = '100%';
-
-    if (!this._leafletMap) {
-      const map = L.map(el, {
-        zoomControl: false,
-        attributionControl: false,
-        dragging: false,
-        scrollWheelZoom: false,
-        doubleClickZoom: false,
-        touchZoom: false,
-        keyboard: false,
-        fadeAnimation: false,   // avoids ghosting on first load
-        markerZoomAnimation: false,
-      });
-
-      // CartoDB Dark Matter — no API key, HTTPS, works globally
-      L.tileLayer(
-        'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png',
-        { maxZoom: 19, subdomains: 'abcd', crossOrigin: true }
-      ).addTo(map);
-
-      // Red Opel pin with glow
-      const icon = L.divIcon({
-        className: '',
-        html: `<svg width="34" height="44" viewBox="0 0 34 44" xmlns="http://www.w3.org/2000/svg">
-          <defs>
-            <filter id="opel-glow" x="-40%" y="-40%" width="180%" height="180%">
-              <feDropShadow dx="0" dy="2" stdDeviation="3" flood-color="rgba(0,0,0,0.6)"/>
-              <feDropShadow dx="0" dy="0" stdDeviation="4" flood-color="rgba(227,0,27,0.5)" result="glow"/>
-            </filter>
-          </defs>
-          <path d="M17 2C9.82 2 4 7.82 4 15c0 9.5 13 27 13 27S30 24.5 30 15C30 7.82 24.18 2 17 2z"
-                fill="#e3001b" filter="url(#opel-glow)"/>
-          <circle cx="17" cy="15" r="5.5" fill="white"/>
-          <circle cx="17" cy="15" r="3" fill="#e3001b"/>
-        </svg>`,
-        iconSize: [34, 44],
-        iconAnchor: [17, 44],
-      });
-
-      this._leafletMarker = L.marker([lat, lon], { icon }).addTo(map);
-      map.setView([lat, lon], 15);
-      this._leafletMap = map;
-
-      // Critical: tell Leaflet to recalculate container size after shadow DOM layout
-      setTimeout(() => {
-        map.invalidateSize({ animate: false });
-        map.setView([lat, lon], 15);
-      }, 100);
-
-    } else {
-      this._leafletMarker?.setLatLng([lat, lon]);
-      this._leafletMap.setView([lat, lon], 15);
-      this._leafletMap.invalidateSize({ animate: false });
+    if (!iframe.dataset.initialized) {
+      // First load: inject full HTML via srcdoc
+      iframe.srcdoc = this._getMapHtml(lat, lon);
+      iframe.dataset.initialized = '1';
+      this._lastLat = lat;
+      this._lastLon = lon;
+    } else if (lat !== this._lastLat || lon !== this._lastLon) {
+      // Position changed: update via postMessage
+      iframe.contentWindow?.postMessage({ type: 'myopel-update', lat, lon }, '*');
+      this._lastLat = lat;
+      this._lastLon = lon;
     }
   }
 
@@ -627,7 +604,10 @@ class MyOpelCard extends LitElement {
     }
 
     const mapContent = (lat && lon)
-      ? html`<div class="op-map-canvas"></div>`
+      ? html`<iframe class="op-map-iframe"
+                 frameborder="0" scrolling="no"
+                 style="width:100%;height:150px;display:block;border:none;">
+             </iframe>`
       : html`<div class="op-map-unavail">📍 Posizione GPS non disponibile</div>`;
 
     return html`

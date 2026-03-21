@@ -10,6 +10,7 @@ from pathlib import Path
 
 from homeassistant.components.frontend import add_extra_js_url
 from homeassistant.components.http import StaticPathConfig
+from homeassistant.components.persistent_notification import async_create as pn_create
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
@@ -26,7 +27,7 @@ from .const import (
 _LOGGER = logging.getLogger(__name__)
 
 PLATFORMS = ["sensor"]
-INTEGRATION_VERSION = "1.0.0"
+INTEGRATION_VERSION = "1.1.0"
 _CARD_JS_URL = f"/myopel/{INTEGRATION_VERSION}/myopel-card.js"
 
 
@@ -66,7 +67,22 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             CONF_IMAP_PASSWORD, CONF_IMAP_FOLDER, CONF_IMAP_SENDER,
             CONF_IMAP_INTERVAL,
         ) if k in entry.data}
-        imap_fetcher = MyOpelImapFetcher(hass, imap_config, file_path, coordinator)
+        imap_fetcher = MyOpelImapFetcher(
+            hass, imap_config, file_path, coordinator,
+            on_no_idle=lambda: pn_create(
+                hass,
+                title="MyOpel – IMAP IDLE non supportato",
+                message=(
+                    f"Il server IMAP **{entry.data.get(CONF_IMAP_SERVER)}** non supporta "
+                    "IMAP IDLE (RFC 2177).\n\n"
+                    "L'integrazione continuerà a controllare la posta ogni "
+                    f"{entry.data.get(CONF_IMAP_INTERVAL, 300)} secondi tramite polling.\n\n"
+                    "Per ricevere aggiornamenti in tempo reale considera di usare Gmail, "
+                    "iCloud o un altro provider che supporta IDLE."
+                ),
+                notification_id="myopel_imap_no_idle",
+            ),
+        )
         await imap_fetcher.async_start()  # runs one immediate fetch synchronously
 
     # First refresh: tolerates empty folder (returns {}) so setup never fails

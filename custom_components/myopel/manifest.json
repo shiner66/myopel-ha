@@ -1,7 +1,7 @@
 {
   "domain": "myopel",
   "name": "MyOpel",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "documentation": "https://github.com/yourusername/myopel-ha",
   "issue_tracker": "https://github.com/yourusername/myopel-ha/issues",
   "requirements": [],

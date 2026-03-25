@@ -1,4 +1,4 @@
-name: Pre-release automatica
+name: Beta release automatica
 
 on:
   push:
@@ -33,7 +33,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          TAG="v${{ steps.version.outputs.version }}-pre.${{ github.run_number }}"
+          TAG="v${{ steps.version.outputs.version }}-beta.${{ github.run_number }}"
           gh release delete "${TAG}" --yes 2>/dev/null || true
           git push origin --delete "${TAG}" 2>/dev/null || true
 
@@ -41,12 +41,12 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          TAG="v${{ steps.version.outputs.version }}-pre.${{ github.run_number }}"
+          TAG="v${{ steps.version.outputs.version }}-beta.${{ github.run_number }}"
           BRANCH="${GITHUB_REF_NAME}"
           gh release create "${TAG}" \
             myopel-ha.zip \
-            --title "v${{ steps.version.outputs.version }} pre-release #${{ github.run_number }}" \
-            --notes "Pre-release automatica dal branch \`${BRANCH}\` – run #${{ github.run_number }}
+            --title "v${{ steps.version.outputs.version }}-beta.${{ github.run_number }}" \
+            --notes "Beta automatica dal branch \`${BRANCH}\` – build #${{ github.run_number }}
 
 > ⚠️ Questa è una pre-release di sviluppo, non usarla in produzione.
 

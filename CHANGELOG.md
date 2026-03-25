@@ -4,6 +4,19 @@ Tutte le modifiche rilevanti a questa integrazione sono documentate qui.
 
 ---
 
+## [1.2.0] – 2026-03-25
+
+### Aggiunte
+- **Traduzione codici alert**: i sensori "Alert attivi", "Riepilogo codici alert" (totale e mensile)
+  mostrano ora il nome leggibile dell'anomalia (es. `Anomalia impianto frenante×2`) invece del
+  codice numerico grezzo. Mappatura completa di 124 codici alert estratti dall'app MyOpel.
+- **GitHub Actions – Pre-release automatica**: ad ogni push su branch non-main viene creata
+  automaticamente una pre-release GitHub con il file `myopel-ha.zip` pronto all'installazione.
+- **GitHub Actions – Release automatica**: ad ogni merge su `main` viene creata una release
+  GitHub con tag versionato e note di rilascio estratte dal CHANGELOG.
+
+---
+
 ## [1.1.0] – 2026-03-21
 
 ### Aggiunte

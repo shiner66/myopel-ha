@@ -37,21 +37,27 @@ jobs:
           gh release delete "${TAG}" --yes 2>/dev/null || true
           git push origin --delete "${TAG}" 2>/dev/null || true
 
+      - name: Crea note di rilascio
+        run: |
+          BRANCH="${GITHUB_REF_NAME}"
+          cat > /tmp/beta_notes.md << NOTES
+          Beta automatica dal branch \`${BRANCH}\` - build #${{ github.run_number }}
+
+          > Questa e' una pre-release di sviluppo, non usarla in produzione.
+
+          **Installazione manuale HACS:**
+          1. Scarica \`myopel-ha.zip\`
+          2. Estrai la cartella \`myopel\` in \`config/custom_components/\`
+          3. Riavvia Home Assistant
+          NOTES
+
       - name: Crea pre-release GitHub
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           TAG="v${{ steps.version.outputs.version }}-beta.${{ github.run_number }}"
-          BRANCH="${GITHUB_REF_NAME}"
           gh release create "${TAG}" \
             myopel-ha.zip \
             --title "v${{ steps.version.outputs.version }}-beta.${{ github.run_number }}" \
-            --notes "Beta automatica dal branch \`${BRANCH}\` – build #${{ github.run_number }}
-
-> ⚠️ Questa è una pre-release di sviluppo, non usarla in produzione.
-
-**Installazione manuale HACS:**
-1. Scarica \`myopel-ha.zip\`
-2. Estrai la cartella \`myopel\` in \`config/custom_components/\`
-3. Riavvia Home Assistant" \
+            --notes-file /tmp/beta_notes.md \
             --prerelease

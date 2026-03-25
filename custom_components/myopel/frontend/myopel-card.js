@@ -371,6 +371,11 @@ class MyOpelCard extends LitElement {
     this._use360     = !!(config.car_view_360);
     this._v360Start  = null;  // pointerdown X (non-reactive)
     this._v360Base   = 0;     // frame index at drag start
+    this._v360IdxF   = 0;     // precise float index (sub-frame)
+    this._v360Vel    = 0;     // velocity in idx/ms
+    this._v360RafId  = null;  // rAF handle for inertia loop
+    this._v360LastX  = 0;     // last pointer X for velocity calc
+    this._v360LastT  = 0;     // last pointer time for velocity calc
   }
   set hass(h) {
     const prev = this._hass;
@@ -488,19 +493,56 @@ class MyOpelCard extends LitElement {
   }
 
   _on360Down(e) {
+    cancelAnimationFrame(this._v360RafId);
+    this._v360Vel   = 0;
     this._v360Start = e.clientX;
-    this._v360Base  = this._view360Idx;
+    this._v360Base  = this._v360IdxF;
+    this._v360LastX = e.clientX;
+    this._v360LastT = performance.now();
     e.currentTarget.setPointerCapture(e.pointerId);
   }
 
   _on360Move(e) {
     if (this._v360Start === null) return;
-    const step = Math.round((e.clientX - this._v360Start) / 8);
-    this._view360Idx = ((this._v360Base + step) % 24 + 24) % 24;
+    const now = performance.now();
+    const dt  = Math.max(now - this._v360LastT, 1);
+    const dx  = e.clientX - this._v360LastX;
+    // Exponential moving average for smooth velocity
+    const rawVel = (dx / dt) / 8;  // idx/ms
+    this._v360Vel = this._v360Vel * 0.7 + rawVel * 0.3;
+    this._v360LastX = e.clientX;
+    this._v360LastT = now;
+    this._v360IdxF = this._v360Base + (e.clientX - this._v360Start) / 8;
+    this._view360Idx = ((Math.round(this._v360IdxF) % 24) + 24) % 24;
   }
 
   _on360Up() {
     this._v360Start = null;
+    this._v360Inertia();
+  }
+
+  _v360Inertia() {
+    let lastT = performance.now();
+    const step = (now) => {
+      const dt = Math.max(now - lastT, 1);
+      lastT = now;
+      // Friction: velocity decays ~8% per 16ms frame
+      this._v360Vel *= Math.pow(0.92, dt / 16);
+      if (Math.abs(this._v360Vel) < 0.0006) return;
+      this._v360IdxF += this._v360Vel * dt;
+      this._view360Idx = ((Math.round(this._v360IdxF) % 24) + 24) % 24;
+      this._v360RafId = requestAnimationFrame(step);
+    };
+    this._v360RafId = requestAnimationFrame(step);
+  }
+
+  _v360Preload() {
+    const vin = this._fullVin();
+    if (!vin) return;
+    for (let i = 0; i < 24; i++) {
+      const img = new Image();
+      img.src = this._v360Url(i);
+    }
   }
 
   // ── Opel visual3D car image (from VIN) ───────────────────────────────────
@@ -562,7 +604,14 @@ class MyOpelCard extends LitElement {
             ${vinShort ? html`
               <div class="op-360-toggle ${this._use360 ? 'active' : ''}"
                    title="${this._use360 ? 'Vista 360° — clicca per disattivare' : 'Clicca per attivare vista 360°'}"
-                   @click=${() => { this._use360 = !this._use360; this._view360Idx = 0; }}>
+                   @click=${() => {
+                     this._use360 = !this._use360;
+                     this._view360Idx = 0;
+                     this._v360IdxF   = 0;
+                     this._v360Vel    = 0;
+                     cancelAnimationFrame(this._v360RafId);
+                     if (this._use360) this._v360Preload();
+                   }}>
                 360°
               </div>
               <div class="op-vin-badge">VIN …${vinShort}</div>

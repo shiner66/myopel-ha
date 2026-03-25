@@ -415,8 +415,14 @@ class MyOpelCard extends LitElement {
     } catch { return v; }
   }
 
-  // ── imagin.studio car image ───────────────────────────────────────────────
+  // ── Opel visual3D car image (from VIN) ───────────────────────────────────
   _carImageUrl() {
+    const vin = (this._config.vin || "").toString().trim();
+    if (vin) {
+      const view = this._config.car_view || "001";
+      return `https://visual3d-secure.opel-vauxhall.com/V3DImage.ashx?client=MyMarque&vin=${encodeURIComponent(vin)}&format=png&width=&view=${encodeURIComponent(view)}`;
+    }
+    // Fallback to imagin.studio if no VIN configured
     const make  = encodeURIComponent(this._config.car_make  || "opel");
     const model = encodeURIComponent(this._config.car_model || "corsa");
     const year  = encodeURIComponent(this._config.car_year  || "2021");

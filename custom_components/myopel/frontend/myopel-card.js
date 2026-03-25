@@ -7,6 +7,7 @@ class MyOpelCard extends LitElement {
     _tab:         { state: true },
     _refuelView:  { state: true },
     _view360Idx:  { state: true },
+    _use360:      { state: true },
   };
 
   static styles = css`
@@ -64,6 +65,26 @@ class MyOpelCard extends LitElement {
       border-radius: 5px; padding: 3px 8px;
       letter-spacing: 1px; font-weight: 600;
       font-family: 'Barlow Condensed', sans-serif;
+    }
+    .op-hero-topbar-right {
+      display: flex; align-items: center; gap: 6px;
+    }
+    .op-360-toggle {
+      font-size: 10px; font-weight: 700;
+      font-family: 'Barlow Condensed', sans-serif;
+      background: rgba(255,255,255,0.04);
+      border: 1px solid var(--op-border);
+      border-radius: 5px; padding: 3px 8px;
+      cursor: pointer; letter-spacing: 1px;
+      color: var(--op-muted);
+      transition: background 0.2s, border-color 0.2s, color 0.2s;
+      user-select: none;
+    }
+    .op-360-toggle:hover { border-color: rgba(255,255,255,0.18); }
+    .op-360-toggle.active {
+      background: rgba(227,0,27,0.15);
+      border-color: rgba(227,0,27,0.5);
+      color: var(--op-red);
     }
 
     /* car image */
@@ -338,6 +359,7 @@ class MyOpelCard extends LitElement {
     this._leafletMap = null;
     this._leafletMarker = null;
     this._view360Idx = 0;
+    this._use360     = !!(config.car_view_360);
     this._v360Start  = null;  // pointerdown X (non-reactive)
     this._v360Base   = 0;     // frame index at drag start
   }
@@ -515,10 +537,19 @@ class MyOpelCard extends LitElement {
           <div>
             <div class="op-hero-title">${this._config.name ?? "La mia Opel"}</div>
           </div>
-          ${vinShort ? html`<div class="op-vin-badge">VIN …${vinShort}</div>` : nothing}
+          <div class="op-hero-topbar-right">
+            ${vinShort ? html`
+              <div class="op-360-toggle ${this._use360 ? 'active' : ''}"
+                   title="${this._use360 ? 'Vista 360° — clicca per disattivare' : 'Clicca per attivare vista 360°'}"
+                   @click=${() => { this._use360 = !this._use360; this._view360Idx = 0; }}>
+                360°
+              </div>
+              <div class="op-vin-badge">VIN …${vinShort}</div>
+            ` : nothing}
+          </div>
         </div>
 
-        ${(this._config.car_view_360 && (this._config.vin || "").toString().trim())
+        ${(this._use360 && (this._config.vin || "").toString().trim())
           ? html`
             <div class="op-car-wrap is-360"
                  @pointerdown=${this._on360Down.bind(this)}

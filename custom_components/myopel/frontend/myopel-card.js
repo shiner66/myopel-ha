@@ -484,7 +484,7 @@ class MyOpelCard extends LitElement {
   _v360Url(idx) {
     const vin  = this._fullVin();
     const view = String(30 + (((idx % 24) + 24) % 24)).padStart(3, "0");
-    return `/api/myopel/car_image?vin=${encodeURIComponent(vin)}&view=${view}`;
+    return `https://visual3d-secure.opel-vauxhall.com/V3DImage.ashx?client=MyMarque&vin=${encodeURIComponent(vin)}&format=png&width=&view=${view}`;
   }
 
   _on360Down(e) {
@@ -503,12 +503,12 @@ class MyOpelCard extends LitElement {
     this._v360Start = null;
   }
 
-  // ── Opel visual3D car image (proxied via /api/myopel/car_image) ─────────
+  // ── Opel visual3D car image (from VIN) ───────────────────────────────────
   _carImageUrl() {
     const vin = this._fullVin();
     if (vin && vin.length >= 10) {
       const view = this._config.car_view || "001";
-      return `/api/myopel/car_image?vin=${encodeURIComponent(vin)}&view=${encodeURIComponent(view)}`;
+      return `https://visual3d-secure.opel-vauxhall.com/V3DImage.ashx?client=MyMarque&vin=${encodeURIComponent(vin)}&format=png&width=&view=${encodeURIComponent(view)}`;
     }
     return this._imaginstudioUrl();
   }

@@ -60,4 +60,5 @@ jobs:
             myopel-ha.zip \
             --title "v${{ steps.version.outputs.version }}-beta.${{ github.run_number }}" \
             --notes-file /tmp/beta_notes.md \
-            --prerelease
+            --prerelease \
+            --target "${{ github.sha }}"

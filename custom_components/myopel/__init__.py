@@ -9,9 +9,13 @@ from collections import Counter, defaultdict
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+import aiohttp
+from aiohttp import web
+
 from homeassistant.components.frontend import add_extra_js_url
-from homeassistant.components.http import StaticPathConfig
+from homeassistant.components.http import HomeAssistantView, StaticPathConfig
 from homeassistant.components.persistent_notification import async_create as pn_create
+from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
@@ -36,6 +40,56 @@ def _alert_label(code: int) -> str:
     """Return a human-readable alert name for the given Opel alert code."""
     return ALERT_CODES.get(code, f"Codice {code}")
 _CARD_JS_URL = f"/myopel/{INTEGRATION_VERSION}/myopel-card.js"
+
+
+# ── Visual3D proxy ────────────────────────────────────────────────────────────
+
+_V3D_BASE = (
+    "https://visual3d-secure.opel-vauxhall.com/V3DImage.ashx"
+    "?client=MyMarque&format=png&width=&vin={vin}&view={view}"
+)
+_V3D_VALID_VIEWS: frozenset[str] = frozenset(
+    [f"{n:03d}" for n in range(1, 5)]        # 001-004
+    + [f"{n:03d}" for n in range(10, 13)]    # 010-012
+    + [f"{n:03d}" for n in range(20, 26)]    # 020-025
+    + [f"{n:03d}" for n in range(30, 54)]    # 030-053
+)
+
+
+class MyOpelCarImageView(HomeAssistantView):
+    """Proxy endpoint for Opel visual3D images.
+
+    Serves images from visual3d-secure.opel-vauxhall.com via HA's own domain,
+    bypassing browser Content-Security-Policy restrictions in Lovelace cards.
+    Not sensitive: the CDN serves publicly accessible car renders.
+    """
+
+    url = "/api/myopel/car_image"
+    name = "api:myopel:car_image"
+    requires_auth = False
+
+    async def get(self, request: web.Request) -> web.Response:  # type: ignore[override]
+        vin  = request.query.get("vin", "").strip().upper()
+        view = request.query.get("view", "001").strip()
+        if not vin or view not in _V3D_VALID_VIEWS:
+            return web.Response(status=400)
+
+        session = async_get_clientsession(request.app["hass"])
+        fetch_url = _V3D_BASE.format(vin=vin, view=view)
+        try:
+            async with session.get(
+                fetch_url, timeout=aiohttp.ClientTimeout(total=10)
+            ) as resp:
+                if resp.status != 200:
+                    return web.Response(status=502)
+                data = await resp.read()
+                return web.Response(
+                    body=data,
+                    content_type="image/png",
+                    headers={"Cache-Control": "public, max-age=86400"},
+                )
+        except Exception:  # noqa: BLE001
+            return web.Response(status=502)
 
 
 # ── Watchdog file handler ─────────────────────────────────────────────────────
@@ -85,7 +139,7 @@ def _make_watchdog_handler(coordinator: "MyOpelCoordinator"):
 # ── Setup / Teardown ──────────────────────────────────────────────────────────
 
 async def async_setup(hass: HomeAssistant, config: dict) -> bool:
-    """Register the Lovelace card JS resource via static HTTP path."""
+    """Register Lovelace card JS and visual3D proxy endpoint."""
     js_file = os.path.join(os.path.dirname(__file__), "frontend", "myopel-card.js")
     registered = hass.data.get("frontend_extra_module_url", {})
     urls = getattr(registered, "urls", set())
@@ -95,6 +149,8 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
         )
         add_extra_js_url(hass, _CARD_JS_URL)
         _LOGGER.debug("MyOpel: card JS registrata su %s", _CARD_JS_URL)
+
+    hass.http.register_view(MyOpelCarImageView())
     return True
 
 

@@ -449,6 +449,11 @@ class MyOpelSensor(CoordinatorEntity[MyOpelCoordinator], SensorEntity):
 
         return value
 
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        """Expose full VIN so the Lovelace card can build image proxy URLs."""
+        return {"vin": self._vin}
+
 
 class MyOpelAlertActiveBinarySensor(CoordinatorEntity[MyOpelCoordinator], BinarySensorEntity):
     """Binary sensor: ON if the last trip had any active alerts."""

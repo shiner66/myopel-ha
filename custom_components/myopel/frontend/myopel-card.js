@@ -93,6 +93,15 @@ class MyOpelCard extends LitElement {
       min-height: 155px;
       display: flex; align-items: center; justify-content: center;
     }
+    /* visual3D images have a white background — radial glow blends it with the dark card */
+    .op-car-wrap.has-v3d {
+      background: radial-gradient(ellipse at 50% 42%,
+        rgba(255,255,255,0.11) 0%,
+        rgba(255,255,255,0.04) 45%,
+        transparent 68%);
+      border-radius: 10px;
+      margin: 4px 8px 0;
+    }
     .op-car-img {
       max-width: 92%; max-height: 165px;
       object-fit: contain;
@@ -458,12 +467,24 @@ class MyOpelCard extends LitElement {
     } catch { return v; }
   }
 
+  // ── VIN completo (dall'attributo sensore, non dal config troncato) ─────────
+  _fullVin() {
+    // sensor.py espone vin come extra_state_attributes su ogni sensore.
+    // Usiamo il chilometraggio come âancora (è sempre present quando ci sono dati).
+    const prefix = this._prefix();
+    const s = this._hass?.states[`sensor.${prefix}_chilometraggio`];
+    const attrVin = s?.attributes?.vin;
+    if (attrVin && attrVin.length >= 10) return attrVin;
+    // Fallback: usa il valore config (potrebbe essere il VIN intero se l'utente lo ha inserito)
+    return (this._config.vin || "").toString().trim();
+  }
+
   // ── 360° viewer ──────────────────────────────────────────────────────────
   // Frames 030–053: 24 angolazioni × 15° = rotazione completa
   _v360Url(idx) {
-    const vin  = (this._config.vin || "").toString().trim();
+    const vin  = this._fullVin();
     const view = String(30 + (((idx % 24) + 24) % 24)).padStart(3, "0");
-    return `https://visual3d-secure.opel-vauxhall.com/V3DImage.ashx?client=MyMarque&vin=${encodeURIComponent(vin)}&format=png&width=&view=${view}`;
+    return `/api/myopel/car_image?vin=${encodeURIComponent(vin)}&view=${view}`;
   }
 
   _on360Down(e) {
@@ -482,12 +503,12 @@ class MyOpelCard extends LitElement {
     this._v360Start = null;
   }
 
-  // ── Opel visual3D car image (from VIN) ───────────────────────────────────
+  // ── Opel visual3D car image (proxied via /api/myopel/car_image) ─────────
   _carImageUrl() {
-    const vin = (this._config.vin || "").toString().trim();
-    if (vin) {
+    const vin = this._fullVin();
+    if (vin && vin.length >= 10) {
       const view = this._config.car_view || "001";
-      return `https://visual3d-secure.opel-vauxhall.com/V3DImage.ashx?client=MyMarque&vin=${encodeURIComponent(vin)}&format=png&width=&view=${encodeURIComponent(view)}`;
+      return `/api/myopel/car_image?vin=${encodeURIComponent(vin)}&view=${encodeURIComponent(view)}`;
     }
     return this._imaginstudioUrl();
   }
@@ -551,7 +572,7 @@ class MyOpelCard extends LitElement {
 
         ${(this._use360 && (this._config.vin || "").toString().trim())
           ? html`
-            <div class="op-car-wrap is-360"
+            <div class="op-car-wrap is-360 has-v3d"
                  @pointerdown=${this._on360Down.bind(this)}
                  @pointermove=${this._on360Move.bind(this)}
                  @pointerup=${this._on360Up.bind(this)}
@@ -567,7 +588,7 @@ class MyOpelCard extends LitElement {
               <div class="op-360-hint">⟵ trascina per ruotare ⟶</div>
             </div>`
           : html`
-            <div class="op-car-wrap">
+            <div class="op-car-wrap has-v3d">
               <img class="op-car-img" src="${this._carImageUrl()}"
                    alt="Opel ${this._config.car_model ?? 'Corsa'}"
                    @error=${this._onCarImgError.bind(this)} />

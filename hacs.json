@@ -1,4 +1,6 @@
 {
   "name": "MyOpel",
+  "zip_release": true,
+  "filename": "myopel-ha.zip",
   "render_readme": true
 }

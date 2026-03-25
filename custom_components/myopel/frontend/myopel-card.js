@@ -2,10 +2,11 @@ import { LitElement, html, css, nothing } from "https://unpkg.com/lit?module";
 
 class MyOpelCard extends LitElement {
   static properties = {
-    _hass:       { state: true },
-    _config:     { state: true },
-    _tab:        { state: true },
-    _refuelView: { state: true },
+    _hass:        { state: true },
+    _config:      { state: true },
+    _tab:         { state: true },
+    _refuelView:  { state: true },
+    _view360Idx:  { state: true },
   };
 
   static styles = css`
@@ -91,6 +92,23 @@ class MyOpelCard extends LitElement {
       position: absolute; bottom: 2px; right: 18px;
       font-size: 10px; color: var(--op-muted); text-align: right;
       font-weight: 500;
+    }
+
+    /* ── 360° drag viewer ── */
+    .op-car-wrap.is-360 {
+      cursor: grab;
+      touch-action: pan-y;
+    }
+    .op-car-wrap.is-360:active { cursor: grabbing; }
+    .op-car-wrap.is-360 .op-car-img {
+      pointer-events: none;
+      user-select: none;
+    }
+    .op-360-hint {
+      position: absolute; bottom: 22px; left: 50%; transform: translateX(-50%);
+      font-size: 10px; color: var(--op-muted);
+      pointer-events: none; white-space: nowrap;
+      letter-spacing: 0.5px; opacity: 0.8;
     }
 
     /* ── Fuel bar — premium ── */
@@ -319,6 +337,9 @@ class MyOpelCard extends LitElement {
     this._refuelView = false;
     this._leafletMap = null;
     this._leafletMarker = null;
+    this._view360Idx = 0;
+    this._v360Start  = null;  // pointerdown X (non-reactive)
+    this._v360Base   = 0;     // frame index at drag start
   }
   set hass(h) {
     const prev = this._hass;
@@ -415,6 +436,30 @@ class MyOpelCard extends LitElement {
     } catch { return v; }
   }
 
+  // ── 360° viewer ──────────────────────────────────────────────────────────
+  // Frames 030–053: 24 angolazioni × 15° = rotazione completa
+  _v360Url(idx) {
+    const vin  = (this._config.vin || "").toString().trim();
+    const view = String(30 + (((idx % 24) + 24) % 24)).padStart(3, "0");
+    return `https://visual3d-secure.opel-vauxhall.com/V3DImage.ashx?client=MyMarque&vin=${encodeURIComponent(vin)}&format=png&width=&view=${view}`;
+  }
+
+  _on360Down(e) {
+    this._v360Start = e.clientX;
+    this._v360Base  = this._view360Idx;
+    e.currentTarget.setPointerCapture(e.pointerId);
+  }
+
+  _on360Move(e) {
+    if (this._v360Start === null) return;
+    const step = Math.round((e.clientX - this._v360Start) / 8);
+    this._view360Idx = ((this._v360Base + step) % 24 + 24) % 24;
+  }
+
+  _on360Up() {
+    this._v360Start = null;
+  }
+
   // ── Opel visual3D car image (from VIN) ───────────────────────────────────
   _carImageUrl() {
     const vin = (this._config.vin || "").toString().trim();
@@ -460,17 +505,34 @@ class MyOpelCard extends LitElement {
           ${vinShort ? html`<div class="op-vin-badge">VIN …${vinShort}</div>` : nothing}
         </div>
 
-        <div class="op-car-wrap">
-          <img class="op-car-img" src="${this._carImageUrl()}"
-               alt="Opel ${this._config.car_model ?? 'Corsa'}"
-               @error=${(e) => e.target.style.opacity="0.15"} />
-          <div class="op-car-mileage">
-            <strong>${mileage}</strong> km
-          </div>
-          <div class="op-car-updated">
-            ${tripEnd !== "—" ? html`Agg. ${tripEnd}` : nothing}
-          </div>
-        </div>
+        ${(this._config.car_view_360 && (this._config.vin || "").toString().trim())
+          ? html`
+            <div class="op-car-wrap is-360"
+                 @pointerdown=${this._on360Down.bind(this)}
+                 @pointermove=${this._on360Move.bind(this)}
+                 @pointerup=${this._on360Up.bind(this)}
+                 @pointercancel=${this._on360Up.bind(this)}>
+              <img class="op-car-img" src="${this._v360Url(this._view360Idx)}"
+                   draggable="false"
+                   alt="360° Opel"
+                   @error=${(e) => e.target.style.opacity="0.15"} />
+              <div class="op-car-mileage"><strong>${mileage}</strong> km</div>
+              <div class="op-car-updated">
+                ${tripEnd !== "—" ? html`Agg. ${tripEnd}` : nothing}
+              </div>
+              <div class="op-360-hint">⟵ trascina per ruotare ⟶</div>
+            </div>`
+          : html`
+            <div class="op-car-wrap">
+              <img class="op-car-img" src="${this._carImageUrl()}"
+                   alt="Opel ${this._config.car_model ?? 'Corsa'}"
+                   @error=${(e) => e.target.style.opacity="0.15"} />
+              <div class="op-car-mileage"><strong>${mileage}</strong> km</div>
+              <div class="op-car-updated">
+                ${tripEnd !== "—" ? html`Agg. ${tripEnd}` : nothing}
+              </div>
+            </div>`
+        }
 
         <div class="op-hero-fuel" @click=${() => this._open("livello_carburante")}>
           <div class="op-fuel-top-row">

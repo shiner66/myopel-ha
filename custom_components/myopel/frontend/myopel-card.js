@@ -467,13 +467,26 @@ class MyOpelCard extends LitElement {
       const view = this._config.car_view || "001";
       return `https://visual3d-secure.opel-vauxhall.com/V3DImage.ashx?client=MyMarque&vin=${encodeURIComponent(vin)}&format=png&width=&view=${encodeURIComponent(view)}`;
     }
-    // Fallback to imagin.studio if no VIN configured
+    return this._imaginstudioUrl();
+  }
+
+  _imaginstudioUrl() {
     const make  = encodeURIComponent(this._config.car_make  || "opel");
     const model = encodeURIComponent(this._config.car_model || "corsa");
     const year  = encodeURIComponent(this._config.car_year  || "2021");
     const color = encodeURIComponent(this._config.car_color || "");
     const base  = `https://cdn.imagin.studio/getImage?customer=img&make=${make}&modelFamily=${model}&modelYear=${year}&zoomType=fullscreen&angle=29`;
     return color ? `${base}&paintId=${color}` : base;
+  }
+
+  // Fallback chain: visual3D → imagin.studio → hidden
+  _onCarImgError(e) {
+    const fallback = this._imaginstudioUrl();
+    if (e.target.src !== fallback) {
+      e.target.src = fallback;
+    } else {
+      e.target.style.opacity = "0.15";
+    }
   }
 
   // ── Render: Hero ──────────────────────────────────────────────────────────
@@ -515,7 +528,7 @@ class MyOpelCard extends LitElement {
               <img class="op-car-img" src="${this._v360Url(this._view360Idx)}"
                    draggable="false"
                    alt="360° Opel"
-                   @error=${(e) => e.target.style.opacity="0.15"} />
+                   @error=${this._onCarImgError.bind(this)} />
               <div class="op-car-mileage"><strong>${mileage}</strong> km</div>
               <div class="op-car-updated">
                 ${tripEnd !== "—" ? html`Agg. ${tripEnd}` : nothing}
@@ -526,7 +539,7 @@ class MyOpelCard extends LitElement {
             <div class="op-car-wrap">
               <img class="op-car-img" src="${this._carImageUrl()}"
                    alt="Opel ${this._config.car_model ?? 'Corsa'}"
-                   @error=${(e) => e.target.style.opacity="0.15"} />
+                   @error=${this._onCarImgError.bind(this)} />
               <div class="op-car-mileage"><strong>${mileage}</strong> km</div>
               <div class="op-car-updated">
                 ${tripEnd !== "—" ? html`Agg. ${tripEnd}` : nothing}

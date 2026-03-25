@@ -29,13 +29,19 @@ jobs:
           zip -r ../myopel-ha.zip myopel/
           cd ..
 
-      - name: Elimina eventuale pre-release precedente con lo stesso tag
+      - name: Elimina tutte le pre-release precedenti della stessa versione
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          TAG="v${{ steps.version.outputs.version }}-beta.${{ github.run_number }}"
-          gh release delete "${TAG}" --yes 2>/dev/null || true
-          git push origin --delete "${TAG}" 2>/dev/null || true
+          VERSION_PREFIX="v${{ steps.version.outputs.version }}-beta."
+          OLD_TAGS=$(gh release list --limit 100 --json tagName,isPrerelease \
+            -q ".[] | select(.isPrerelease) | select(.tagName | startswith(\"${VERSION_PREFIX}\")) | .tagName" \
+            2>/dev/null || true)
+          for TAG in $OLD_TAGS; do
+            echo "Elimino pre-release: ${TAG}"
+            gh release delete "${TAG}" --yes 2>/dev/null || true
+            git push origin --delete "${TAG}" 2>/dev/null || true
+          done
 
       - name: Crea note di rilascio
         run: |

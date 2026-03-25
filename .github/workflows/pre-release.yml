@@ -1,0 +1,57 @@
+name: Pre-release automatica
+
+on:
+  push:
+    branches-ignore:
+      - main
+
+permissions:
+  contents: write
+
+jobs:
+  pre-release:
+    name: Crea pre-release
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Leggi versione da manifest.json
+        id: version
+        run: |
+          VERSION=$(jq -r '.version' custom_components/myopel/manifest.json)
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+
+      - name: Crea archivio myopel-ha.zip
+        run: |
+          cd custom_components
+          zip -r ../myopel-ha.zip myopel/
+          cd ..
+
+      - name: Elimina eventuale pre-release precedente con lo stesso tag
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="v${{ steps.version.outputs.version }}-pre.${{ github.run_number }}"
+          gh release delete "${TAG}" --yes 2>/dev/null || true
+          git push origin --delete "${TAG}" 2>/dev/null || true
+
+      - name: Crea pre-release GitHub
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="v${{ steps.version.outputs.version }}-pre.${{ github.run_number }}"
+          BRANCH="${GITHUB_REF_NAME}"
+          gh release create "${TAG}" \
+            myopel-ha.zip \
+            --title "v${{ steps.version.outputs.version }} pre-release #${{ github.run_number }}" \
+            --notes "Pre-release automatica dal branch \`${BRANCH}\` – run #${{ github.run_number }}
+
+> ⚠️ Questa è una pre-release di sviluppo, non usarla in produzione.
+
+**Installazione manuale HACS:**
+1. Scarica \`myopel-ha.zip\`
+2. Estrai la cartella \`myopel\` in \`config/custom_components/\`
+3. Riavvia Home Assistant" \
+            --prerelease

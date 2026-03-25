@@ -15,6 +15,7 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
+from .alerts import ALERT_CODES
 from .const import CONF_FILE_PATH, CONF_SCAN_INTERVAL, DEFAULT_SCAN_INTERVAL, DOMAIN
 from .const import (
     CONF_IMAP_SERVER, CONF_IMAP_PORT, CONF_IMAP_USERNAME, CONF_IMAP_PASSWORD,
@@ -27,7 +28,12 @@ from .const import (
 _LOGGER = logging.getLogger(__name__)
 
 PLATFORMS = ["sensor"]
-INTEGRATION_VERSION = "1.1.0"
+INTEGRATION_VERSION = "1.2.0"
+
+
+def _alert_label(code: int) -> str:
+    """Return a human-readable alert name for the given Opel alert code."""
+    return ALERT_CODES.get(code, f"Codice {code}")
 _CARD_JS_URL = f"/myopel/{INTEGRATION_VERSION}/myopel-card.js"
 
 
@@ -255,7 +261,7 @@ class MyOpelCoordinator(DataUpdateCoordinator):
         last_trip_alert_count = len(last_trip_alerts)
         last_trip_has_alerts = bool(last_trip_alerts)
         last_trip_alert_codes = (
-            ", ".join(str(c) for c in sorted(set(last_trip_alerts)))
+            ", ".join(_alert_label(c) for c in sorted(set(last_trip_alerts)))
             if last_trip_alerts else "Nessuno"
         )
 
@@ -266,7 +272,7 @@ class MyOpelCoordinator(DataUpdateCoordinator):
         total_alert_count = len(all_alert_codes)
         alert_freq = Counter(all_alert_codes)
         all_alert_codes_summary = (
-            ", ".join(f"{code}×{cnt}" for code, cnt in alert_freq.most_common())
+            ", ".join(f"{_alert_label(code)}×{cnt}" for code, cnt in alert_freq.most_common())
             if alert_freq else "Nessuno"
         )
 
@@ -363,7 +369,7 @@ class MyOpelCoordinator(DataUpdateCoordinator):
         month_alert_count = len(month_alerts)
         month_alert_freq = Counter(month_alerts)
         month_alert_codes_summary = (
-            ", ".join(f"{code}×{cnt}" for code, cnt in month_alert_freq.most_common())
+            ", ".join(f"{_alert_label(code)}×{cnt}" for code, cnt in month_alert_freq.most_common())
             if month_alert_freq else "Nessuno"
         )
 

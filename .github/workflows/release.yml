@@ -1,0 +1,61 @@
+name: Release automatica
+
+on:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Crea release
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Leggi versione da manifest.json
+        id: version
+        run: |
+          VERSION=$(jq -r '.version' custom_components/myopel/manifest.json)
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+
+      - name: Estrai note changelog per la versione corrente
+        id: changelog
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          # Estrai la sezione ## [X.Y.Z] fino alla prossima sezione ##
+          NOTES=$(awk "/^## \[${VERSION}\]/{found=1; next} found && /^## \[/{exit} found{print}" CHANGELOG.md)
+          # Salva su file per preservare i newline
+          echo "${NOTES}" > /tmp/release_notes.md
+          echo "notes_file=/tmp/release_notes.md" >> "$GITHUB_OUTPUT"
+
+      - name: Controlla che il tag non esista già
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="v${{ steps.version.outputs.version }}"
+          if gh release view "${TAG}" &>/dev/null; then
+            echo "::error::La release ${TAG} esiste già. Aggiorna la versione in manifest.json prima di fare merge su main."
+            exit 1
+          fi
+
+      - name: Crea archivio myopel-ha.zip
+        run: |
+          cd custom_components
+          zip -r ../myopel-ha.zip myopel/
+          cd ..
+
+      - name: Crea release GitHub
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="v${{ steps.version.outputs.version }}"
+          gh release create "${TAG}" \
+            myopel-ha.zip \
+            --title "MyOpel ${TAG}" \
+            --notes-file "${{ steps.changelog.outputs.notes_file }}" \
+            --latest

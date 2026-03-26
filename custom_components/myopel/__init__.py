@@ -55,7 +55,7 @@ class _TripFileHandler:
     @staticmethod
     def _is_relevant(src_path: str) -> bool:
         name = os.path.basename(src_path)
-        return name in ("trips.json", "trips", "trips.export") or name.endswith(".myop")
+        return name in ("trips.json", "trips.export") or name.endswith(".myop")
 
     def dispatch(self, event) -> None:
         if not event.is_directory and self._is_relevant(event.src_path):
@@ -263,10 +263,8 @@ class MyOpelCoordinator(DataUpdateCoordinator):
         folder = Path(self.file_path)
         folder.mkdir(parents=True, exist_ok=True)
 
-        # Accept .myop (legacy), trips.json, and trips (no extension, for iOS Shortcuts); pick newest
+        # Accept .myop (legacy), trips.json, trips.export (iOS Shortcuts); pick newest
         candidates = list(folder.glob("*.myop")) + list(folder.glob("trips.json")) + (
-            [folder / "trips"] if (folder / "trips").is_file() else []
-        ) + (
             [folder / "trips.export"] if (folder / "trips.export").is_file() else []
         )
         if not candidates:

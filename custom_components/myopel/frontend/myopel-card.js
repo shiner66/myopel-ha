@@ -134,10 +134,6 @@ class MyOpelCard extends LitElement {
       pointer-events: none;
       user-select: none;
     }
-    .op-360-img-wrap {
-      display: flex; align-items: center; justify-content: center;
-      width: 100%;
-    }
     .op-360-hint {
       position: absolute; bottom: 22px; left: 50%; transform: translateX(-50%);
       font-size: 10px; color: var(--op-muted);
@@ -400,6 +396,8 @@ class MyOpelCard extends LitElement {
     this._v360RafId  = null;
     this._v360LastX  = 0;
     this._v360LastT  = 0;
+    // px per frame — più alto = giri più lenti ma frame più spazi tra loro
+    this._v360Sens   = 12;
   }
   set hass(h) {
     const prev = this._hass;
@@ -531,15 +529,12 @@ class MyOpelCard extends LitElement {
     const now = performance.now();
     const dt  = Math.max(now - this._v360LastT, 1);
     const dx  = e.clientX - this._v360LastX;
-    const rawVel = (dx / dt) / 8;
+    const rawVel = (dx / dt) / this._v360Sens;
     this._v360Vel = this._v360Vel * 0.7 + rawVel * 0.3;
     this._v360LastX = e.clientX;
     this._v360LastT = now;
-    this._v360IdxF = this._v360Base + (e.clientX - this._v360Start) / 8;
-    // Frame changes at frac=0.5 (maximum squish) — hides the jump
-    const rounded = Math.round(this._v360IdxF);
-    this._view360Idx = ((rounded % 24) + 24) % 24;
-    this._v360ApplySquish();
+    this._v360IdxF = this._v360Base + (e.clientX - this._v360Start) / this._v360Sens;
+    this._view360Idx = ((Math.round(this._v360IdxF) % 24) + 24) % 24;
   }
 
   _on360Up() {
@@ -553,29 +548,12 @@ class MyOpelCard extends LitElement {
       const dt = Math.max(now - lastT, 1);
       lastT = now;
       this._v360Vel *= Math.pow(0.92, dt / 16);
-      if (Math.abs(this._v360Vel) < 0.0006) {
-        this._v360ClearSquish();
-        return;
-      }
+      if (Math.abs(this._v360Vel) < 0.0006) return;
       this._v360IdxF += this._v360Vel * dt;
       this._view360Idx = ((Math.round(this._v360IdxF) % 24) + 24) % 24;
-      this._v360ApplySquish();
       this._v360RafId = requestAnimationFrame(step);
     };
     this._v360RafId = requestAnimationFrame(step);
-  }
-
-  // Squish: scaleX compresses to hide the 15° frame jump at frac=0.5
-  _v360ApplySquish() {
-    const frac = ((this._v360IdxF % 1) + 1) % 1;
-    const squeeze = 1 - 0.07 * Math.sin(frac * Math.PI);
-    const img = this.shadowRoot?.querySelector('.op-car-wrap.is-360 .op-car-img');
-    if (img) img.style.transform = `scaleX(${squeeze.toFixed(4)})`;
-  }
-
-  _v360ClearSquish() {
-    const img = this.shadowRoot?.querySelector('.op-car-wrap.is-360 .op-car-img');
-    if (img) img.style.transform = '';
   }
 
   _v360Preload() {
@@ -675,7 +653,6 @@ class MyOpelCard extends LitElement {
                      this._v360IdxF   = 0;
                      this._v360Vel    = 0;
                      cancelAnimationFrame(this._v360RafId);
-                     this._v360ClearSquish();
                      if (this._use360) this._v360Preload();
                    }}>
                 360°

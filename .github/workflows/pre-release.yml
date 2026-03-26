@@ -23,17 +23,6 @@ jobs:
           VERSION=$(jq -r '.version' custom_components/myopel/manifest.json)
           echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
 
-      - name: Calcola numero beta (sequenziale per versione)
-        id: beta_num
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          PREFIX="v${{ steps.version.outputs.version }}-beta."
-          LAST=$(gh release list --limit 100 --json tagName,isPrerelease \
-            -q ".[] | select(.isPrerelease) | select(.tagName | startswith(\"${PREFIX}\")) | .tagName" \
-            2>/dev/null | sed 's/.*-beta\.//' | sort -n | tail -1)
-          echo "num=$((${LAST:-0} + 1))" >> "$GITHUB_OUTPUT"
-
       - name: Elimina tutte le pre-release beta esistenti (qualsiasi versione)
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -57,7 +46,7 @@ jobs:
         run: |
           BRANCH="${GITHUB_REF_NAME}"
           cat > /tmp/beta_notes.md << NOTES
-          Beta automatica dal branch \`${BRANCH}\` - build #${{ github.run_number }}
+          Beta automatica dal branch \`${BRANCH}\`
 
           > Questa e' una pre-release di sviluppo, non usarla in produzione.
 
@@ -71,7 +60,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          TAG="v${{ steps.version.outputs.version }}-beta.${{ steps.beta_num.outputs.num }}"
+          TAG="v${{ steps.version.outputs.version }}-beta.1"
           gh release create "${TAG}" \
             myopel-ha.zip \
             --title "${TAG}" \

@@ -6,6 +6,7 @@ class MyOpelCard extends LitElement {
     _config:      { state: true },
     _tab:         { state: true },
     _refuelView:  { state: true },
+    _view360Idx:  { state: true },
     _use360:      { state: true },
   };
 
@@ -133,10 +134,9 @@ class MyOpelCard extends LitElement {
       pointer-events: none;
       user-select: none;
     }
-    canvas.op-car-img {
-      object-fit: unset;
-      max-width: 92%; max-height: 165px;
-      width: auto; height: auto;
+    .op-360-img-wrap {
+      display: flex; align-items: center; justify-content: center;
+      width: 100%;
     }
     .op-360-hint {
       position: absolute; bottom: 22px; left: 50%; transform: translateX(-50%);
@@ -391,15 +391,15 @@ class MyOpelCard extends LitElement {
     this._refuelView = false;
     this._leafletMap = null;
     this._leafletMarker = null;
+    this._view360Idx = 0;
     this._use360     = !!(config.car_view_360);
-    this._v360Start  = null;  // pointerdown X (non-reactive)
-    this._v360Base   = 0;     // frame index at drag start
-    this._v360IdxF   = 0;     // precise float index (sub-frame)
-    this._v360Vel    = 0;     // velocity in idx/ms
-    this._v360RafId  = null;  // rAF handle for inertia loop
-    this._v360LastX  = 0;     // last pointer X for velocity calc
-    this._v360LastT  = 0;     // last pointer time for velocity calc
-    this._v360Imgs   = [];    // preloaded Image objects (24 frames)
+    this._v360Start  = null;
+    this._v360Base   = 0;
+    this._v360IdxF   = 0;
+    this._v360Vel    = 0;
+    this._v360RafId  = null;
+    this._v360LastX  = 0;
+    this._v360LastT  = 0;
   }
   set hass(h) {
     const prev = this._hass;
@@ -531,12 +531,15 @@ class MyOpelCard extends LitElement {
     const now = performance.now();
     const dt  = Math.max(now - this._v360LastT, 1);
     const dx  = e.clientX - this._v360LastX;
-    const rawVel = (dx / dt) / 8;  // idx/ms
+    const rawVel = (dx / dt) / 8;
     this._v360Vel = this._v360Vel * 0.7 + rawVel * 0.3;
     this._v360LastX = e.clientX;
     this._v360LastT = now;
     this._v360IdxF = this._v360Base + (e.clientX - this._v360Start) / 8;
-    this._v360DrawCanvas();
+    // Frame changes at frac=0.5 (maximum squish) — hides the jump
+    const rounded = Math.round(this._v360IdxF);
+    this._view360Idx = ((rounded % 24) + 24) % 24;
+    this._v360ApplySquish();
   }
 
   _on360Up() {
@@ -550,62 +553,37 @@ class MyOpelCard extends LitElement {
       const dt = Math.max(now - lastT, 1);
       lastT = now;
       this._v360Vel *= Math.pow(0.92, dt / 16);
-      if (Math.abs(this._v360Vel) < 0.0006) return;
+      if (Math.abs(this._v360Vel) < 0.0006) {
+        this._v360ClearSquish();
+        return;
+      }
       this._v360IdxF += this._v360Vel * dt;
-      this._v360DrawCanvas();
+      this._view360Idx = ((Math.round(this._v360IdxF) % 24) + 24) % 24;
+      this._v360ApplySquish();
       this._v360RafId = requestAnimationFrame(step);
     };
     this._v360RafId = requestAnimationFrame(step);
   }
 
+  // Squish: scaleX compresses to hide the 15° frame jump at frac=0.5
+  _v360ApplySquish() {
+    const frac = ((this._v360IdxF % 1) + 1) % 1;
+    const squeeze = 1 - 0.07 * Math.sin(frac * Math.PI);
+    const img = this.shadowRoot?.querySelector('.op-car-wrap.is-360 .op-car-img');
+    if (img) img.style.transform = `scaleX(${squeeze.toFixed(4)})`;
+  }
+
+  _v360ClearSquish() {
+    const img = this.shadowRoot?.querySelector('.op-car-wrap.is-360 .op-car-img');
+    if (img) img.style.transform = '';
+  }
+
   _v360Preload() {
     const vin = this._fullVin();
     if (!vin) return;
-    this._v360Imgs = Array.from({length: 24}, (_, i) => {
+    for (let i = 0; i < 24; i++) {
       const img = new Image();
-      img.crossOrigin = "anonymous";
-      img.onload = () => this._v360DrawCanvas();
       img.src = this._v360Url(i);
-      return img;
-    });
-  }
-
-  _v360DrawCanvas() {
-    const canvas = this.shadowRoot?.querySelector('.op-360-canvas');
-    if (!canvas) return;
-    const imgs = this._v360Imgs;
-    if (!imgs?.length) return;
-
-    // Normalise float index to [0, 24)
-    const raw  = this._v360IdxF;
-    const total = 24;
-    const idxF  = ((raw % total) + total) % total;
-    const idx0  = Math.floor(idxF) % total;
-    const idx1  = (idx0 + 1) % total;
-    const frac  = idxF - Math.floor(idxF);
-
-    const img0 = imgs[idx0];
-    if (!img0?.complete || !img0.naturalWidth) return;
-
-    // Size canvas buffer from first loaded image (done once)
-    if (!canvas._sized) {
-      canvas.width  = img0.naturalWidth  || 960;
-      canvas.height = img0.naturalHeight || 480;
-      canvas._sized = true;
-    }
-    const w = canvas.width, h = canvas.height;
-    const ctx = canvas.getContext('2d');
-
-    ctx.clearRect(0, 0, w, h);
-    // Draw base frame fully opaque
-    ctx.globalAlpha = 1;
-    ctx.drawImage(img0, 0, 0, w, h);
-    // Blend next frame on top proportionally to fractional position
-    const img1 = imgs[idx1];
-    if (frac > 0.01 && img1?.complete && img1.naturalWidth) {
-      ctx.globalAlpha = frac;
-      ctx.drawImage(img1, 0, 0, w, h);
-      ctx.globalAlpha = 1;
     }
   }
 
@@ -693,9 +671,11 @@ class MyOpelCard extends LitElement {
                    title="${this._use360 ? 'Vista 360° — clicca per disattivare' : 'Clicca per attivare vista 360°'}"
                    @click=${() => {
                      this._use360 = !this._use360;
-                     this._v360IdxF = 0;
-                     this._v360Vel  = 0;
+                     this._view360Idx = 0;
+                     this._v360IdxF   = 0;
+                     this._v360Vel    = 0;
                      cancelAnimationFrame(this._v360RafId);
+                     this._v360ClearSquish();
                      if (this._use360) this._v360Preload();
                    }}>
                 360°
@@ -712,7 +692,9 @@ class MyOpelCard extends LitElement {
                  @pointermove=${this._on360Move.bind(this)}
                  @pointerup=${this._on360Up.bind(this)}
                  @pointercancel=${this._on360Up.bind(this)}>
-              <canvas class="op-car-img op-360-canvas"></canvas>
+              <img class="op-car-img" src="${this._v360Url(this._view360Idx)}"
+                   draggable="false" alt="360° Opel"
+                   @error=${this._onCarImgError.bind(this)} />
               <div class="op-car-mileage"><strong>${mileage}</strong> km</div>
               <div class="op-car-updated">
                 ${tripEnd !== "—" ? html`Agg. ${tripEnd}` : nothing}
@@ -824,10 +806,6 @@ class MyOpelCard extends LitElement {
 
   updated(changed) {
     super.updated && super.updated(changed);
-    // Draw canvas when 360° view is first activated
-    if (changed.has('_use360') && this._use360) {
-      this._v360DrawCanvas();
-    }
     if (!this._config?.plate) return;
 
     const plate = this._uniprefix();

@@ -53,7 +53,9 @@ def _validate_trip_folder(path: str) -> dict | None:
     if not p.is_dir():
         raise NotADirectoryError
 
-    candidates = list(p.glob("*.myop")) + list(p.glob("trips.json"))
+    candidates = list(p.glob("*.myop")) + list(p.glob("trips.json")) + (
+        [p / "trips"] if (p / "trips").is_file() else []
+    )
     if not candidates:
         return None  # empty folder — ok if IMAP configured or file copied later
 

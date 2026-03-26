@@ -281,6 +281,26 @@ class MyOpelCard extends LitElement {
     .op-row-lbl { font-size: 13px; color: var(--op-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-weight: 500; }
     .op-row-val { font-size: 14px; font-weight: 700; white-space: nowrap; flex-shrink: 0; }
     .op-row-val .u { font-size: 11px; font-weight: 500; color: var(--op-muted); margin-left: 2px; }
+    /* full-width alert codes block */
+    .op-alert-block {
+      margin: 4px 0 2px; padding: 9px 12px;
+      background: rgba(227,0,27,0.07); border: 1px solid rgba(227,0,27,0.22);
+      border-radius: 10px; cursor: pointer;
+    }
+    .op-alert-block:hover { background: rgba(227,0,27,0.11); }
+    .op-alert-block-header {
+      display: flex; align-items: center; justify-content: space-between; margin-bottom: 4px;
+    }
+    .op-alert-block-label {
+      font-size: 11px; font-weight: 700; letter-spacing: 0.5px;
+      text-transform: uppercase; color: var(--op-red);
+    }
+    .op-alert-block-count {
+      font-size: 11px; font-weight: 700;
+      background: rgba(227,0,27,0.15); color: var(--op-red);
+      border: 1px solid rgba(227,0,27,0.3); border-radius: 20px; padding: 1px 7px;
+    }
+    .op-alert-block-text { font-size: 12px; color: var(--op-text); line-height: 1.5; word-break: break-word; }
 
     /* maintenance bars */
     .op-mbar {
@@ -572,6 +592,29 @@ class MyOpelCard extends LitElement {
     } else {
       e.target.style.opacity = "0.15";
     }
+  }
+
+  // ── Alert block (full-width, wrappable) ──────────────────────────────────
+  _alertBlock(countSuffix, codesSuffix) {
+    const count = this._state(countSuffix);
+    const codes = this._state(codesSuffix);
+    if (!codes || codes === "Nessuno") {
+      return html`<div class="op-row" style="padding:8px 6px;border-bottom:none;">
+        <div class="op-row-left">
+          <div class="op-row-ico">✅</div>
+          <div class="op-row-lbl">Alert</div>
+        </div>
+        <div class="op-row-val">Nessuno</div>
+      </div>`;
+    }
+    return html`
+      <div class="op-alert-block" @click=${() => this._open(codesSuffix)}>
+        <div class="op-alert-block-header">
+          <span class="op-alert-block-label">⚠️ Alert attivi</span>
+          ${count !== null ? html`<span class="op-alert-block-count">${count}</span>` : nothing}
+        </div>
+        <div class="op-alert-block-text">${codes}</div>
+      </div>`;
   }
 
   // ── Render: Hero ──────────────────────────────────────────────────────────
@@ -874,8 +917,7 @@ class MyOpelCard extends LitElement {
       ${this._row("⛽","Carburante totale",this._fmt("mese_corrente_carburante_totale")," L","mese_corrente_carburante_totale")}
       ${this._row("📈","Consumo medio",    this._fmt("mese_corrente_consumo_medio")," km/L","mese_corrente_consumo_medio")}
       ${this._row("💶","Costo stimato",    this._fmt("mese_corrente_costo_stimato")," €","mese_corrente_costo_stimato")}
-      ${this._row("⚠️","Alert",           this._state("mese_corrente_n_alert")??"—","","mese_corrente_n_alert")}
-      ${this._row("📋","Codici alert",     this._state("mese_corrente_codici_alert")??"Nessuno","","mese_corrente_codici_alert")}
+      ${this._alertBlock("mese_corrente_alert", "mese_corrente_codici_alert")}
     </div>`;
   }
 
@@ -926,8 +968,7 @@ class MyOpelCard extends LitElement {
       ${this._row("⛽","Carburante totale",this._fmt("totale_carburante_consumato")," L","totale_carburante_consumato")}
       ${this._row("📈","Consumo medio",    this._fmt("totale_consumo_medio")," km/L","totale_consumo_medio")}
       ${this._row("💶","Costo totale",     this._fmt("totale_costo_stimato")," €","totale_costo_stimato")}
-      ${this._row("⚠️","Alert totali",    this._state("totale_alert")??"—","","totale_alert")}
-      ${this._row("📋","Codici alert",     this._state("totale_riepilogo_codici_alert")??"Nessuno","","totale_riepilogo_codici_alert")}
+      ${this._alertBlock("totale_alert", "totale_riepilogo_codici_alert")}
     </div>`;
   }
 

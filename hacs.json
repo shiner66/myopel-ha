@@ -1,4 +1,5 @@
 {
   "name": "MyOpel",
-  "render_readme": true
+  "render_readme": true,
+  "description": "Monitora il tuo veicolo Opel/Vauxhall: sensori viaggio, card Lovelace con immagine 3D interattiva e download automatico via email"
 }

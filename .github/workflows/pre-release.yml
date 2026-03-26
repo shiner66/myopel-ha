@@ -23,18 +23,30 @@ jobs:
           VERSION=$(jq -r '.version' custom_components/myopel/manifest.json)
           echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
 
-      - name: Elimina tutte le pre-release beta esistenti (qualsiasi versione)
+      - name: Elimina beta di versioni precedenti
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
+          CURRENT_PREFIX="v${{ steps.version.outputs.version }}-beta."
           OLD_TAGS=$(gh release list --limit 100 --json tagName,isPrerelease \
-            -q '.[] | select(.isPrerelease) | select(.tagName | test("-beta\\.")) | .tagName' \
+            -q ".[] | select(.isPrerelease) | select(.tagName | test(\"-beta\\.\")) | select(.tagName | startswith(\"${CURRENT_PREFIX}\") | not) | .tagName" \
             2>/dev/null || true)
           for TAG in $OLD_TAGS; do
-            echo "Elimino pre-release: ${TAG}"
+            echo "Elimino beta vecchia: ${TAG}"
             gh release delete "${TAG}" --yes 2>/dev/null || true
             git push origin --delete "${TAG}" 2>/dev/null || true
           done
+
+      - name: Calcola prossimo numero beta
+        id: beta_num
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          PREFIX="v${{ steps.version.outputs.version }}-beta."
+          LAST=$(gh release list --limit 100 --json tagName,isPrerelease \
+            -q ".[] | select(.isPrerelease) | select(.tagName | startswith(\"${PREFIX}\")) | .tagName" \
+            2>/dev/null | sed 's/.*-beta\.//' | sort -n | tail -1)
+          echo "num=$((${LAST:-0} + 1))" >> "$GITHUB_OUTPUT"
 
       - name: Crea archivio myopel-ha.zip
         run: |
@@ -60,7 +72,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          TAG="v${{ steps.version.outputs.version }}-beta.1"
+          TAG="v${{ steps.version.outputs.version }}-beta.${{ steps.beta_num.outputs.num }}"
           gh release create "${TAG}" \
             myopel-ha.zip \
             --title "${TAG}" \

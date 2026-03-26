@@ -23,25 +23,35 @@ jobs:
           VERSION=$(jq -r '.version' custom_components/myopel/manifest.json)
           echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
 
-      - name: Crea archivio myopel-ha.zip
-        run: |
-          cd custom_components
-          zip -r ../myopel-ha.zip myopel/
-          cd ..
-
-      - name: Elimina tutte le pre-release precedenti della stessa versione
+      - name: Calcola numero beta (sequenziale per versione)
+        id: beta_num
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          VERSION_PREFIX="v${{ steps.version.outputs.version }}-beta."
+          PREFIX="v${{ steps.version.outputs.version }}-beta."
+          LAST=$(gh release list --limit 100 --json tagName,isPrerelease \
+            -q ".[] | select(.isPrerelease) | select(.tagName | startswith(\"${PREFIX}\")) | .tagName" \
+            2>/dev/null | sed 's/.*-beta\.//' | sort -n | tail -1)
+          echo "num=$((${LAST:-0} + 1))" >> "$GITHUB_OUTPUT"
+
+      - name: Elimina tutte le pre-release beta esistenti (qualsiasi versione)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
           OLD_TAGS=$(gh release list --limit 100 --json tagName,isPrerelease \
-            -q ".[] | select(.isPrerelease) | select(.tagName | startswith(\"${VERSION_PREFIX}\")) | .tagName" \
+            -q '.[] | select(.isPrerelease) | select(.tagName | test("-beta\\.")) | .tagName' \
             2>/dev/null || true)
           for TAG in $OLD_TAGS; do
             echo "Elimino pre-release: ${TAG}"
             gh release delete "${TAG}" --yes 2>/dev/null || true
             git push origin --delete "${TAG}" 2>/dev/null || true
           done
+
+      - name: Crea archivio myopel-ha.zip
+        run: |
+          cd custom_components
+          zip -r ../myopel-ha.zip myopel/
+          cd ..
 
       - name: Crea note di rilascio
         run: |
@@ -61,10 +71,10 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          TAG="v${{ steps.version.outputs.version }}-beta.${{ github.run_number }}"
+          TAG="v${{ steps.version.outputs.version }}-beta.${{ steps.beta_num.outputs.num }}"
           gh release create "${TAG}" \
             myopel-ha.zip \
-            --title "v${{ steps.version.outputs.version }}-beta.${{ github.run_number }}" \
+            --title "${TAG}" \
             --notes-file /tmp/beta_notes.md \
             --prerelease \
             --target "${{ github.sha }}"

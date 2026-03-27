@@ -486,10 +486,7 @@ class MyOpelCard extends LitElement {
     const v = this._state(suffix);
     if (!v) return "—";
     try {
-      // Stellantis stores local time with Z suffix — strip any timezone marker
-      // so JS Date treats it as local time, avoiding a spurious +1h offset
-      const local = v.replace(/Z$|[+-]\d{2}:\d{2}$/, '');
-      return new Date(local).toLocaleString("it-IT",
+      return new Date(v).toLocaleString("it-IT",
         { day:"2-digit", month:"2-digit", hour:"2-digit", minute:"2-digit" });
     } catch { return v; }
   }

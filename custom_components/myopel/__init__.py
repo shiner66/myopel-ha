@@ -29,7 +29,7 @@ from .const import (
 _LOGGER = logging.getLogger(__name__)
 
 PLATFORMS = ["sensor"]
-INTEGRATION_VERSION = "1.3.0"
+INTEGRATION_VERSION = "1.3.2"
 
 
 def _alert_label(code: int) -> str:

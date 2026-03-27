@@ -486,8 +486,11 @@ class MyOpelCard extends LitElement {
     const v = this._state(suffix);
     if (!v) return "—";
     try {
-      return new Date(v).toLocaleString("it-IT",
-        { day:"2-digit", month:"2-digit", hour:"2-digit", minute:"2-digit" });
+      const tz = this._hass?.config?.time_zone;
+      return new Date(v).toLocaleString("it-IT", {
+        day:"2-digit", month:"2-digit", hour:"2-digit", minute:"2-digit",
+        ...(tz ? { timeZone: tz } : {}),
+      });
     } catch { return v; }
   }
 

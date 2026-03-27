@@ -53,13 +53,13 @@ class _TripFileHandler:
         )
 
     @staticmethod
-    def _is_relevant(src_path: str) -> bool:
-        name = os.path.basename(src_path)
+    def _is_relevant(path: str) -> bool:
+        name = os.path.basename(path)
         return name in ("trips.json", "trips.export") or name.endswith(".myop")
 
-    def dispatch(self, event) -> None:
-        if not event.is_directory and self._is_relevant(event.src_path):
-            _LOGGER.debug("MyOpel: rilevata modifica file %s, aggiorno dati", event.src_path)
+    def dispatch(self, path: str) -> None:
+        if self._is_relevant(path):
+            _LOGGER.debug("MyOpel: rilevata modifica file %s, aggiorno dati", path)
             self._trigger()
 
 
@@ -74,10 +74,18 @@ def _make_watchdog_handler(coordinator: "MyOpelCoordinator"):
 
     class _Handler(FileSystemEventHandler):
         def on_modified(self, event):
-            trip_handler.dispatch(event)
+            if not event.is_directory:
+                trip_handler.dispatch(event.src_path)
 
         def on_created(self, event):
-            trip_handler.dispatch(event)
+            if not event.is_directory:
+                trip_handler.dispatch(event.src_path)
+
+        def on_moved(self, event):
+            # Atomic writes (iOS Shortcuts, many editors) rename a temp file
+            # to the final name — fires on_moved, not on_modified/on_created
+            if not event.is_directory:
+                trip_handler.dispatch(event.dest_path)
 
     return _Handler()
 

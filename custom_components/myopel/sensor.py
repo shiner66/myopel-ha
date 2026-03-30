@@ -141,7 +141,7 @@ SENSOR_DESCRIPTIONS: tuple[MyOpelSensorDescription, ...] = (
     MyOpelSensorDescription(
         key="last_trip_alert_count",
         data_key="last_trip_alert_count",
-        name="Ultimo viaggio – N° alert",
+        name="Ultimo viaggio – Alert",
         state_class=SensorStateClass.MEASUREMENT,
         icon="mdi:alert-circle-outline",
     ),
@@ -301,7 +301,7 @@ SENSOR_DESCRIPTIONS: tuple[MyOpelSensorDescription, ...] = (
     MyOpelSensorDescription(
         key="month_alert_count",
         data_key="month_alert_count",
-        name="Mese corrente – N° alert",
+        name="Mese corrente – Alert",
         state_class=SensorStateClass.MEASUREMENT,
         icon="mdi:alert-circle-outline",
     ),
@@ -448,6 +448,11 @@ class MyOpelSensor(CoordinatorEntity[MyOpelCoordinator], SensorEntity):
                 return None
 
         return value
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        """Expose full VIN so the Lovelace card can build image proxy URLs."""
+        return {"vin": self._vin}
 
 
 class MyOpelAlertActiveBinarySensor(CoordinatorEntity[MyOpelCoordinator], BinarySensorEntity):

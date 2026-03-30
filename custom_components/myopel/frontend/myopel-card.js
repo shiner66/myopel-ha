@@ -2,10 +2,12 @@ import { LitElement, html, css, nothing } from "https://unpkg.com/lit?module";
 
 class MyOpelCard extends LitElement {
   static properties = {
-    _hass:       { state: true },
-    _config:     { state: true },
-    _tab:        { state: true },
-    _refuelView: { state: true },
+    _hass:        { state: true },
+    _config:      { state: true },
+    _tab:         { state: true },
+    _refuelView:  { state: true },
+    _view360Idx:  { state: true },
+    _use360:      { state: true },
   };
 
   static styles = css`
@@ -64,12 +66,41 @@ class MyOpelCard extends LitElement {
       letter-spacing: 1px; font-weight: 600;
       font-family: 'Barlow Condensed', sans-serif;
     }
+    .op-hero-topbar-right {
+      display: flex; align-items: center; gap: 6px;
+    }
+    .op-360-toggle {
+      font-size: 10px; font-weight: 700;
+      font-family: 'Barlow Condensed', sans-serif;
+      background: rgba(255,255,255,0.04);
+      border: 1px solid var(--op-border);
+      border-radius: 5px; padding: 3px 8px;
+      cursor: pointer; letter-spacing: 1px;
+      color: var(--op-muted);
+      transition: background 0.2s, border-color 0.2s, color 0.2s;
+      user-select: none;
+    }
+    .op-360-toggle:hover { border-color: rgba(255,255,255,0.18); }
+    .op-360-toggle.active {
+      background: rgba(227,0,27,0.15);
+      border-color: rgba(227,0,27,0.5);
+      color: var(--op-red);
+    }
 
     /* car image */
     .op-car-wrap {
       position: relative; padding: 8px 0 0;
       min-height: 155px;
       display: flex; align-items: center; justify-content: center;
+    }
+    /* visual3D images have a white background — radial glow blends it with the dark card */
+    .op-car-wrap.has-v3d {
+      background: radial-gradient(ellipse at 50% 42%,
+        rgba(255,255,255,0.11) 0%,
+        rgba(255,255,255,0.04) 45%,
+        transparent 68%);
+      border-radius: 10px;
+      margin: 4px 8px 0;
     }
     .op-car-img {
       max-width: 92%; max-height: 165px;
@@ -91,6 +122,23 @@ class MyOpelCard extends LitElement {
       position: absolute; bottom: 2px; right: 18px;
       font-size: 10px; color: var(--op-muted); text-align: right;
       font-weight: 500;
+    }
+
+    /* ── 360° drag viewer ── */
+    .op-car-wrap.is-360 {
+      cursor: grab;
+      touch-action: pan-y;
+    }
+    .op-car-wrap.is-360:active { cursor: grabbing; }
+    .op-car-wrap.is-360 .op-car-img {
+      pointer-events: none;
+      user-select: none;
+    }
+    .op-360-hint {
+      position: absolute; bottom: 22px; left: 50%; transform: translateX(-50%);
+      font-size: 10px; color: var(--op-muted);
+      pointer-events: none; white-space: nowrap;
+      letter-spacing: 0.5px; opacity: 0.8;
     }
 
     /* ── Fuel bar — premium ── */
@@ -233,6 +281,26 @@ class MyOpelCard extends LitElement {
     .op-row-lbl { font-size: 13px; color: var(--op-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-weight: 500; }
     .op-row-val { font-size: 14px; font-weight: 700; white-space: nowrap; flex-shrink: 0; }
     .op-row-val .u { font-size: 11px; font-weight: 500; color: var(--op-muted); margin-left: 2px; }
+    /* full-width alert codes block */
+    .op-alert-block {
+      margin: 4px 0 2px; padding: 9px 12px;
+      background: rgba(227,0,27,0.07); border: 1px solid rgba(227,0,27,0.22);
+      border-radius: 10px; cursor: pointer;
+    }
+    .op-alert-block:hover { background: rgba(227,0,27,0.11); }
+    .op-alert-block-header {
+      display: flex; align-items: center; justify-content: space-between; margin-bottom: 4px;
+    }
+    .op-alert-block-label {
+      font-size: 11px; font-weight: 700; letter-spacing: 0.5px;
+      text-transform: uppercase; color: var(--op-red);
+    }
+    .op-alert-block-count {
+      font-size: 11px; font-weight: 700;
+      background: rgba(227,0,27,0.15); color: var(--op-red);
+      border: 1px solid rgba(227,0,27,0.3); border-radius: 20px; padding: 1px 7px;
+    }
+    .op-alert-block-text { font-size: 12px; color: var(--op-text); line-height: 1.5; word-break: break-word; }
 
     /* maintenance bars */
     .op-mbar {
@@ -319,6 +387,17 @@ class MyOpelCard extends LitElement {
     this._refuelView = false;
     this._leafletMap = null;
     this._leafletMarker = null;
+    this._view360Idx = 0;
+    this._use360     = !!(config.car_view_360);
+    this._v360Start  = null;
+    this._v360Base   = 0;
+    this._v360IdxF   = 0;
+    this._v360Vel    = 0;
+    this._v360RafId  = null;
+    this._v360LastX  = 0;
+    this._v360LastT  = 0;
+    // px per frame — più alto = giri più lenti ma frame più spazi tra loro
+    this._v360Sens   = 12;
   }
   set hass(h) {
     const prev = this._hass;
@@ -407,22 +486,135 @@ class MyOpelCard extends LitElement {
     const v = this._state(suffix);
     if (!v) return "—";
     try {
-      // Stellantis stores local time with Z suffix — strip any timezone marker
-      // so JS Date treats it as local time, avoiding a spurious +1h offset
-      const local = v.replace(/Z$|[+-]\d{2}:\d{2}$/, '');
-      return new Date(local).toLocaleString("it-IT",
-        { day:"2-digit", month:"2-digit", hour:"2-digit", minute:"2-digit" });
+      const tz = this._hass?.config?.time_zone;
+      return new Date(v).toLocaleString("it-IT", {
+        day:"2-digit", month:"2-digit", hour:"2-digit", minute:"2-digit",
+        ...(tz ? { timeZone: tz } : {}),
+      });
     } catch { return v; }
   }
 
-  // ── imagin.studio car image ───────────────────────────────────────────────
+  // ── VIN completo (dall'attributo sensore, non dal config troncato) ─────────
+  _fullVin() {
+    // sensor.py espone vin come extra_state_attributes su ogni sensore.
+    // Usiamo il chilometraggio come âancora (è sempre present quando ci sono dati).
+    const prefix = this._prefix();
+    const s = this._hass?.states[`sensor.${prefix}_chilometraggio`];
+    const attrVin = s?.attributes?.vin;
+    if (attrVin && attrVin.length >= 10) return attrVin;
+    // Fallback: usa il valore config (potrebbe essere il VIN intero se l'utente lo ha inserito)
+    return (this._config.vin || "").toString().trim();
+  }
+
+  // ── 360° viewer ──────────────────────────────────────────────────────────
+  // Frames 030–053: 24 angolazioni × 15° = rotazione completa
+  _v360Url(idx) {
+    const vin  = this._fullVin();
+    const view = String(30 + (((idx % 24) + 24) % 24)).padStart(3, "0");
+    return `https://visual3d-secure.opel-vauxhall.com/V3DImage.ashx?client=MyMarque&vin=${encodeURIComponent(vin)}&format=png&width=&view=${view}`;
+  }
+
+  _on360Down(e) {
+    cancelAnimationFrame(this._v360RafId);
+    this._v360Vel   = 0;
+    this._v360Start = e.clientX;
+    this._v360Base  = this._v360IdxF;
+    this._v360LastX = e.clientX;
+    this._v360LastT = performance.now();
+    e.currentTarget.setPointerCapture(e.pointerId);
+  }
+
+  _on360Move(e) {
+    if (this._v360Start === null) return;
+    const now = performance.now();
+    const dt  = Math.max(now - this._v360LastT, 1);
+    const dx  = e.clientX - this._v360LastX;
+    const rawVel = (dx / dt) / this._v360Sens;
+    this._v360Vel = this._v360Vel * 0.7 + rawVel * 0.3;
+    this._v360LastX = e.clientX;
+    this._v360LastT = now;
+    this._v360IdxF = this._v360Base + (e.clientX - this._v360Start) / this._v360Sens;
+    this._view360Idx = ((Math.round(this._v360IdxF) % 24) + 24) % 24;
+  }
+
+  _on360Up() {
+    this._v360Start = null;
+    this._v360Inertia();
+  }
+
+  _v360Inertia() {
+    let lastT = performance.now();
+    const step = (now) => {
+      const dt = Math.max(now - lastT, 1);
+      lastT = now;
+      this._v360Vel *= Math.pow(0.92, dt / 16);
+      if (Math.abs(this._v360Vel) < 0.0006) return;
+      this._v360IdxF += this._v360Vel * dt;
+      this._view360Idx = ((Math.round(this._v360IdxF) % 24) + 24) % 24;
+      this._v360RafId = requestAnimationFrame(step);
+    };
+    this._v360RafId = requestAnimationFrame(step);
+  }
+
+  _v360Preload() {
+    const vin = this._fullVin();
+    if (!vin) return;
+    for (let i = 0; i < 24; i++) {
+      const img = new Image();
+      img.src = this._v360Url(i);
+    }
+  }
+
+  // ── Opel visual3D car image (from VIN) ───────────────────────────────────
   _carImageUrl() {
+    const vin = this._fullVin();
+    if (vin && vin.length >= 10) {
+      const view = this._config.car_view || "001";
+      return `https://visual3d-secure.opel-vauxhall.com/V3DImage.ashx?client=MyMarque&vin=${encodeURIComponent(vin)}&format=png&width=&view=${encodeURIComponent(view)}`;
+    }
+    return this._imaginstudioUrl();
+  }
+
+  _imaginstudioUrl() {
     const make  = encodeURIComponent(this._config.car_make  || "opel");
     const model = encodeURIComponent(this._config.car_model || "corsa");
     const year  = encodeURIComponent(this._config.car_year  || "2021");
     const color = encodeURIComponent(this._config.car_color || "");
     const base  = `https://cdn.imagin.studio/getImage?customer=img&make=${make}&modelFamily=${model}&modelYear=${year}&zoomType=fullscreen&angle=29`;
     return color ? `${base}&paintId=${color}` : base;
+  }
+
+  // Fallback chain: visual3D → imagin.studio → hidden
+  _onCarImgError(e) {
+    const fallback = this._imaginstudioUrl();
+    if (e.target.src !== fallback) {
+      e.target.src = fallback;
+    } else {
+      e.target.style.opacity = "0.15";
+    }
+  }
+
+  // ── Alert block (full-width, wrappable) ──────────────────────────────────
+  _alertBlock(countSuffix, codesSuffix) {
+    const count = this._state(countSuffix);
+    const codes = this._state(codesSuffix);
+    if (!codes || codes === "Nessuno") {
+      return html`<div class="op-row" style="padding:8px 6px;border-bottom:none;">
+        <div class="op-row-left">
+          <div class="op-row-ico">✅</div>
+          <div class="op-row-lbl">Alert</div>
+        </div>
+        <div class="op-row-val">Nessuno</div>
+      </div>`;
+    }
+    return html`
+      <div class="op-alert-block" @click=${() => this._open(codesSuffix)}>
+        <div class="op-alert-block-header">
+          <span class="op-alert-block-label">⚠️ Alert attivi</span>
+          ${count !== null ? html`<span class="op-alert-block-count">${count}</span>` : nothing}
+        </div>
+        <div class="op-alert-block-text">${codes}</div>
+      </div>`;
   }
 
   // ── Render: Hero ──────────────────────────────────────────────────────────
@@ -451,20 +643,52 @@ class MyOpelCard extends LitElement {
           <div>
             <div class="op-hero-title">${this._config.name ?? "La mia Opel"}</div>
           </div>
-          ${vinShort ? html`<div class="op-vin-badge">VIN …${vinShort}</div>` : nothing}
+          <div class="op-hero-topbar-right">
+            ${vinShort ? html`
+              <div class="op-360-toggle ${this._use360 ? 'active' : ''}"
+                   title="${this._use360 ? 'Vista 360° — clicca per disattivare' : 'Clicca per attivare vista 360°'}"
+                   @click=${() => {
+                     this._use360 = !this._use360;
+                     this._view360Idx = 0;
+                     this._v360IdxF   = 0;
+                     this._v360Vel    = 0;
+                     cancelAnimationFrame(this._v360RafId);
+                     if (this._use360) this._v360Preload();
+                   }}>
+                360°
+              </div>
+              <div class="op-vin-badge">VIN …${vinShort}</div>
+            ` : nothing}
+          </div>
         </div>
 
-        <div class="op-car-wrap">
-          <img class="op-car-img" src="${this._carImageUrl()}"
-               alt="Opel ${this._config.car_model ?? 'Corsa'}"
-               @error=${(e) => e.target.style.opacity="0.15"} />
-          <div class="op-car-mileage">
-            <strong>${mileage}</strong> km
-          </div>
-          <div class="op-car-updated">
-            ${tripEnd !== "—" ? html`Agg. ${tripEnd}` : nothing}
-          </div>
-        </div>
+        ${(this._use360 && (this._config.vin || "").toString().trim())
+          ? html`
+            <div class="op-car-wrap is-360 has-v3d"
+                 @pointerdown=${this._on360Down.bind(this)}
+                 @pointermove=${this._on360Move.bind(this)}
+                 @pointerup=${this._on360Up.bind(this)}
+                 @pointercancel=${this._on360Up.bind(this)}>
+              <img class="op-car-img" src="${this._v360Url(this._view360Idx)}"
+                   draggable="false" alt="360° Opel"
+                   @error=${this._onCarImgError.bind(this)} />
+              <div class="op-car-mileage"><strong>${mileage}</strong> km</div>
+              <div class="op-car-updated">
+                ${tripEnd !== "—" ? html`Agg. ${tripEnd}` : nothing}
+              </div>
+              <div class="op-360-hint">⟵ trascina per ruotare ⟶</div>
+            </div>`
+          : html`
+            <div class="op-car-wrap has-v3d">
+              <img class="op-car-img" src="${this._carImageUrl()}"
+                   alt="Opel ${this._config.car_model ?? 'Corsa'}"
+                   @error=${this._onCarImgError.bind(this)} />
+              <div class="op-car-mileage"><strong>${mileage}</strong> km</div>
+              <div class="op-car-updated">
+                ${tripEnd !== "—" ? html`Agg. ${tripEnd}` : nothing}
+              </div>
+            </div>`
+        }
 
         <div class="op-hero-fuel" @click=${() => this._open("livello_carburante")}>
           <div class="op-fuel-top-row">
@@ -692,8 +916,7 @@ class MyOpelCard extends LitElement {
       ${this._row("⛽","Carburante totale",this._fmt("mese_corrente_carburante_totale")," L","mese_corrente_carburante_totale")}
       ${this._row("📈","Consumo medio",    this._fmt("mese_corrente_consumo_medio")," km/L","mese_corrente_consumo_medio")}
       ${this._row("💶","Costo stimato",    this._fmt("mese_corrente_costo_stimato")," €","mese_corrente_costo_stimato")}
-      ${this._row("⚠️","Alert",           this._state("mese_corrente_n_alert")??"—","","mese_corrente_n_alert")}
-      ${this._row("📋","Codici alert",     this._state("mese_corrente_codici_alert")??"Nessuno","","mese_corrente_codici_alert")}
+      ${this._alertBlock("mese_corrente_alert", "mese_corrente_codici_alert")}
     </div>`;
   }
 
@@ -744,8 +967,7 @@ class MyOpelCard extends LitElement {
       ${this._row("⛽","Carburante totale",this._fmt("totale_carburante_consumato")," L","totale_carburante_consumato")}
       ${this._row("📈","Consumo medio",    this._fmt("totale_consumo_medio")," km/L","totale_consumo_medio")}
       ${this._row("💶","Costo totale",     this._fmt("totale_costo_stimato")," €","totale_costo_stimato")}
-      ${this._row("⚠️","Alert totali",    this._state("totale_alert")??"—","","totale_alert")}
-      ${this._row("📋","Codici alert",     this._state("totale_riepilogo_codici_alert")??"Nessuno","","totale_riepilogo_codici_alert")}
+      ${this._alertBlock("totale_alert", "totale_riepilogo_codici_alert")}
     </div>`;
   }
 

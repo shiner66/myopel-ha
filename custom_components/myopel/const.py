@@ -17,6 +17,7 @@ CONF_IMAP_PASSWORD = "imap_password"
 CONF_IMAP_FOLDER = "imap_folder"
 CONF_IMAP_SENDER = "imap_sender"
 CONF_IMAP_INTERVAL = "imap_interval"
+CONF_IMAP_DISABLED = "imap_disabled"
 
 DEFAULT_IMAP_PORT = 993
 DEFAULT_IMAP_FOLDER = "INBOX"

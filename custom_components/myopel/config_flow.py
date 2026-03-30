@@ -14,6 +14,7 @@ from homeassistant.data_entry_flow import FlowResult
 
 from .const import (
     CONF_FILE_PATH,
+    CONF_IMAP_DISABLED,
     CONF_IMAP_FOLDER,
     CONF_IMAP_INTERVAL,
     CONF_IMAP_PASSWORD,
@@ -32,14 +33,17 @@ from .const import (
     DOMAIN,
 )
 
+DEFAULT_FOLDER = "/config/myopel/"
+
 
 # ── Validators ────────────────────────────────────────────────────────────────
 
-def _validate_myop_folder(path: str) -> dict | None:
+def _validate_trip_folder(path: str) -> dict | None:
     """
     Validate the folder path.
-    Returns parsed data from the newest .myop file, or None if folder is empty
-    (acceptable when IMAP will populate it later).
+    Accepts both .myop (legacy) and trips.json (native app format).
+    Returns parsed data from the newest file, or None if folder is empty
+    (acceptable when IMAP / manual copy will populate it later).
     Raises on invalid path or bad JSON.
     """
     p = Path(path)
@@ -49,12 +53,15 @@ def _validate_myop_folder(path: str) -> dict | None:
     if not p.is_dir():
         raise NotADirectoryError
 
-    myop_files = sorted(p.glob("*.myop"), key=lambda f: f.stat().st_mtime, reverse=True)
-    if not myop_files:
-        return None  # empty folder — ok if IMAP configured
+    candidates = list(p.glob("*.myop")) + list(p.glob("trips.json")) + (
+        [p / "trips.export"] if (p / "trips.export").is_file() else []
+    )
+    if not candidates:
+        return None  # empty folder — ok if IMAP configured or file copied later
 
+    candidates.sort(key=lambda f: f.stat().st_mtime, reverse=True)
     try:
-        data = json.loads(myop_files[0].read_text(encoding="utf-8"))
+        data = json.loads(candidates[0].read_text(encoding="utf-8"))
         if not isinstance(data, list) or not data or "vin" not in data[0]:
             raise ValueError("invalid_format")
         return data
@@ -98,7 +105,7 @@ class MyOpelConfigFlow(ConfigFlow, domain=DOMAIN):
             path = user_input[CONF_FILE_PATH].strip()
             try:
                 data = await self.hass.async_add_executor_job(
-                    _validate_myop_folder, path
+                    _validate_trip_folder, path
                 )
             except NotADirectoryError:
                 errors[CONF_FILE_PATH] = "not_a_directory"
@@ -116,9 +123,11 @@ class MyOpelConfigFlow(ConfigFlow, domain=DOMAIN):
 
         return self.async_show_form(
             step_id="user",
-            data_schema=vol.Schema({vol.Required(CONF_FILE_PATH): str}),
+            data_schema=vol.Schema({
+                vol.Required(CONF_FILE_PATH, default=DEFAULT_FOLDER): str,
+            }),
             errors=errors,
-            description_placeholders={"example": "/config/myopel/"},
+            description_placeholders={"example": DEFAULT_FOLDER},
         )
 
     # Step 2 — IMAP (optional)
@@ -128,11 +137,9 @@ class MyOpelConfigFlow(ConfigFlow, domain=DOMAIN):
         errors: dict[str, str] = {}
 
         if user_input is not None:
-            # User clicked "Salta" (no imap_server provided) → save without IMAP
             if not user_input.get(CONF_IMAP_SERVER, "").strip():
                 return self._create_entry({})
 
-            # Validate credentials in executor
             try:
                 await self.hass.async_add_executor_job(
                     _validate_imap,
@@ -194,7 +201,7 @@ class MyOpelConfigFlow(ConfigFlow, domain=DOMAIN):
 # ── Options Flow ──────────────────────────────────────────────────────────────
 
 class MyOpelOptionsFlow(OptionsFlow):
-    """Options: polling interval + IMAP settings."""
+    """Options: folder path, polling interval, IMAP settings."""
 
     async def async_step_init(
         self, user_input: dict[str, Any] | None = None
@@ -204,8 +211,23 @@ class MyOpelOptionsFlow(OptionsFlow):
         o = self.config_entry.options
 
         if user_input is not None:
+            # Validate new folder path if changed
+            new_path = user_input.get(CONF_FILE_PATH, "").strip()
+            if new_path:
+                try:
+                    await self.hass.async_add_executor_job(
+                        _validate_trip_folder, new_path
+                    )
+                except NotADirectoryError:
+                    errors[CONF_FILE_PATH] = "not_a_directory"
+                except ValueError as err:
+                    errors[CONF_FILE_PATH] = str(err) if str(err) in (
+                        "invalid_format", "invalid_json"
+                    ) else "invalid_format"
+
+            imap_disabled = user_input.get(CONF_IMAP_DISABLED, False)
             imap_server = user_input.get(CONF_IMAP_SERVER, "").strip()
-            if imap_server:
+            if not imap_disabled and imap_server:
                 try:
                     await self.hass.async_add_executor_job(
                         _validate_imap,
@@ -225,9 +247,15 @@ class MyOpelOptionsFlow(OptionsFlow):
             if not errors:
                 return self.async_create_entry(title="", data=user_input)
 
+        current_path = o.get(CONF_FILE_PATH, d.get(CONF_FILE_PATH, DEFAULT_FOLDER))
+
         return self.async_show_form(
             step_id="init",
             data_schema=vol.Schema({
+                vol.Optional(
+                    CONF_FILE_PATH,
+                    default=current_path,
+                ): str,
                 vol.Required(
                     CONF_SCAN_INTERVAL,
                     default=o.get(CONF_SCAN_INTERVAL, DEFAULT_SCAN_INTERVAL),
@@ -241,32 +269,36 @@ class MyOpelOptionsFlow(OptionsFlow):
                     default=o.get(CONF_MIN_TRIP_DISTANCE, DEFAULT_MIN_TRIP_DISTANCE),
                 ): vol.All(vol.Coerce(float), vol.Range(min=0.1, max=50.0)),
                 vol.Optional(
+                    CONF_IMAP_DISABLED,
+                    default=o.get(CONF_IMAP_DISABLED, False),
+                ): bool,
+                vol.Optional(
                     CONF_IMAP_SERVER,
-                    default=d.get(CONF_IMAP_SERVER, ""),
+                    default=o.get(CONF_IMAP_SERVER, d.get(CONF_IMAP_SERVER, "")),
                 ): str,
                 vol.Optional(
                     CONF_IMAP_PORT,
-                    default=d.get(CONF_IMAP_PORT, DEFAULT_IMAP_PORT),
+                    default=o.get(CONF_IMAP_PORT, d.get(CONF_IMAP_PORT, DEFAULT_IMAP_PORT)),
                 ): int,
                 vol.Optional(
                     CONF_IMAP_USERNAME,
-                    default=d.get(CONF_IMAP_USERNAME, ""),
+                    default=o.get(CONF_IMAP_USERNAME, d.get(CONF_IMAP_USERNAME, "")),
                 ): str,
                 vol.Optional(
                     CONF_IMAP_PASSWORD,
-                    default=d.get(CONF_IMAP_PASSWORD, ""),
+                    default=o.get(CONF_IMAP_PASSWORD, d.get(CONF_IMAP_PASSWORD, "")),
                 ): str,
                 vol.Optional(
                     CONF_IMAP_FOLDER,
-                    default=d.get(CONF_IMAP_FOLDER, DEFAULT_IMAP_FOLDER),
+                    default=o.get(CONF_IMAP_FOLDER, d.get(CONF_IMAP_FOLDER, DEFAULT_IMAP_FOLDER)),
                 ): str,
                 vol.Optional(
                     CONF_IMAP_SENDER,
-                    default=d.get(CONF_IMAP_SENDER, ""),
+                    default=o.get(CONF_IMAP_SENDER, d.get(CONF_IMAP_SENDER, "")),
                 ): str,
                 vol.Optional(
                     CONF_IMAP_INTERVAL,
-                    default=d.get(CONF_IMAP_INTERVAL, DEFAULT_IMAP_INTERVAL),
+                    default=o.get(CONF_IMAP_INTERVAL, d.get(CONF_IMAP_INTERVAL, DEFAULT_IMAP_INTERVAL)),
                 ): vol.All(int, vol.Range(min=60, max=86400)),
             }),
             errors=errors,

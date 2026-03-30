@@ -3,7 +3,7 @@
     "step": {
       "user": {
         "title": "Cartella file MyOpel",
-        "description": "Inserisci il percorso della cartella dove salvare i file .myop.\nVerrà creata automaticamente se non esiste.\nEsempio: {example}",
+        "description": "Inserisci il percorso della cartella dove salvare i file .myop o trips.json.\nVerrà creata automaticamente se non esiste.\nEsempio: {example}",
         "data": {
           "file_path": "Percorso cartella"
         }
@@ -24,8 +24,8 @@
     },
     "error": {
       "not_a_directory": "Il percorso non punta a una cartella.",
-      "invalid_json": "Il file .myop trovato non è JSON valido.",
-      "invalid_format": "Il file .myop trovato non è un export MyOpel valido.",
+      "invalid_json": "Il file trovato non è JSON valido.",
+      "invalid_format": "Il file trovato non è un export MyOpel valido.",
       "imap_cannot_connect": "Impossibile connettersi al server IMAP. Controlla server e porta.",
       "imap_auth_failed": "Credenziali IMAP non valide. Controlla email e password.",
       "imap_folder_not_found": "Cartella IMAP non trovata."
@@ -39,9 +39,11 @@
       "init": {
         "title": "Opzioni MyOpel",
         "data": {
-          "scan_interval": "Intervallo lettura file (secondi)",
+          "file_path": "Percorso cartella (lascia vuoto per non cambiare)",
+          "scan_interval": "Intervallo lettura file fallback (secondi)",
           "min_trip_distance_enabled": "Ignora viaggi corti come ultimo viaggio",
           "min_trip_distance": "Distanza minima ultimo viaggio (km)",
+          "imap_disabled": "Disabilita download automatico via email (IMAP)",
           "imap_server": "Server IMAP",
           "imap_port": "Porta IMAP",
           "imap_username": "Indirizzo email",

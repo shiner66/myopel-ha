@@ -4,6 +4,33 @@ Tutte le modifiche rilevanti a questa integrazione sono documentate qui.
 
 ---
 
+## [1.3.0] – 2026-03-25
+
+### Aggiunte
+- **Supporto `trips.json`**: accettato come sorgente dati accanto ai file `.myop` legacy.
+  Stesso parser JSON — viene usato il file più recente tra quelli presenti nella cartella.
+  `trips.json` è il formato nativo dell'app e contiene dati più aggiornati e numeri più precisi.
+- **File watching con watchdog (inotify)**: i dati vengono aggiornati istantaneamente quando
+  il file viene sovrascritto, senza attendere il ciclo di polling.
+  Gestisce sia `on_modified` (sovrascrittura) che `on_created` (ricreazione del file).
+  Il polling rimane attivo come rete di sicurezza. `iot_class` aggiornata a `local_push`.
+- **Percorso cartella modificabile dalle opzioni**: il percorso della cartella monitorata
+  può ora essere cambiato da "Configura" senza reinstallare — il vecchio observer viene
+  fermato e uno nuovo avviato sul nuovo percorso senza riavvio di HA.
+- **Disabilitazione IMAP dalle opzioni**: nuovo toggle "Disabilita download automatico via email"
+  per disattivare IMAP senza perdere le credenziali configurate.
+- **Immagine auto 3D dal VIN** (card Lovelace): la card usa ora il CDN Opel visual3D
+  (`visual3d-secure.opel-vauxhall.com`) con il VIN per ottenere un'immagine 3D reale del veicolo.
+  Supporta il parametro `car_view` (default `001`; valori validi: `001`–`004`, `010`–`012`,
+  `020`–`025`, `030`–`053`). Fallback a imagin.studio se il VIN non è configurato.
+
+### Modifiche
+- **Config flow**: percorso cartella pre-compilato con `/config/myopel/` come default.
+- **Opzioni IMAP prendono precedenza sui dati originali**: le credenziali IMAP aggiornate
+  nelle opzioni sono ora applicate al riavvio senza dover reinstallare l'integrazione.
+
+---
+
 ## [1.2.0] – 2026-03-25
 
 ### Aggiunte

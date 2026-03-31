@@ -432,18 +432,19 @@ class MyOpelSensor(CoordinatorEntity[MyOpelCoordinator], SensorEntity):
         value = self.coordinator.data.get(self.entity_description.data_key)
 
         # Convert ISO timestamp strings to datetime objects for timestamp sensors.
-        # NOTE: Stellantis/.myop files store LOCAL time but incorrectly mark it as UTC (Z suffix).
-        # Stripping the Z and attaching the HA local timezone avoids the spurious +1h offset.
+        # NOTE: Stellantis/.myop files mark timestamps with "Z" (UTC) but the value is always
+        # CET (UTC+1) — even in summer. The server does NOT adjust for DST (CEST = UTC+2).
+        # Using a fixed UTC+1 offset gives the correct display in both winter and summer:
+        # the card then converts UTC → local time (CEST in summer) correctly.
         if (
             self.entity_description.device_class == SensorDeviceClass.TIMESTAMP
             and isinstance(value, str)
         ):
-            from datetime import datetime
-            import homeassistant.util.dt as dt_util
+            from datetime import datetime, timezone, timedelta
             try:
                 naive = datetime.fromisoformat(value.rstrip("Z"))
-                local_tz = dt_util.get_default_time_zone()
-                return naive.replace(tzinfo=local_tz)
+                cet = timezone(timedelta(hours=1))
+                return naive.replace(tzinfo=cet)
             except (ValueError, AttributeError):
                 return None
 

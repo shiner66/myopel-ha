@@ -434,6 +434,9 @@ class MyOpelSensor(CoordinatorEntity[MyOpelCoordinator], SensorEntity):
         # Convert ISO timestamp strings to datetime objects for timestamp sensors.
         # NOTE: Stellantis/.myop files store LOCAL time but incorrectly mark it as UTC (Z suffix).
         # Stripping the Z and attaching the HA local timezone avoids the spurious +1h offset.
+        # IMPORTANT: pytz (older HA) ignores DST with replace() — always uses standard offset
+        # (UTC+1 for Europe/Rome). After DST this causes +1h drift. Use localize() for pytz;
+        # replace() is correct for zoneinfo (modern HA).
         if (
             self.entity_description.device_class == SensorDeviceClass.TIMESTAMP
             and isinstance(value, str)
@@ -443,6 +446,9 @@ class MyOpelSensor(CoordinatorEntity[MyOpelCoordinator], SensorEntity):
             try:
                 naive = datetime.fromisoformat(value.rstrip("Z"))
                 local_tz = dt_util.get_default_time_zone()
+                if hasattr(local_tz, "localize"):
+                    # pytz: localize() correctly applies DST-aware offset
+                    return local_tz.localize(naive)
                 return naive.replace(tzinfo=local_tz)
             except (ValueError, AttributeError):
                 return None

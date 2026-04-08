@@ -1,0 +1,62 @@
+name: Validate
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  hassfest:
+    name: Hassfest
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: home-assistant/actions/hassfest@master
+
+  hacs:
+    name: HACS
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hacs/action@v1.1.1
+        with:
+          category: integration
+
+  lint:
+    name: Lint & Test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install test dependencies
+        run: pip install -r requirements_test.txt
+
+      - name: Validate JSON syntax
+        run: |
+          find . -name "*.json" -not -path "./.git/*" | while read f; do
+            python -m json.tool "$f" > /dev/null && echo "OK: $f" || { echo "FAIL: $f"; exit 1; }
+          done
+
+      - name: Validate YAML syntax
+        run: |
+          python - <<'EOF'
+          import pathlib, yaml, sys
+          ok = True
+          for f in pathlib.Path(".").rglob("*.y*ml"):
+              if ".git" in f.parts:
+                  continue
+              try:
+                  yaml.safe_load(f.read_text())
+                  print(f"OK: {f}")
+              except yaml.YAMLError as e:
+                  print(f"FAIL: {f}: {e}", file=sys.stderr)
+                  ok = False
+          sys.exit(0 if ok else 1)
+          EOF
+
+      - name: Run tests
+        run: python -m pytest tests/ -v

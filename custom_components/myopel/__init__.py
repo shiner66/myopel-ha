@@ -14,6 +14,7 @@ from homeassistant.components.http import StaticPathConfig
 from homeassistant.components.persistent_notification import async_create as pn_create
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, callback
+from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
 from .alerts import ALERT_CODES
@@ -27,6 +28,8 @@ from .const import (
 )
 
 _LOGGER = logging.getLogger(__name__)
+
+CONFIG_SCHEMA = cv.config_entry_only_config_schema(DOMAIN)
 
 PLATFORMS = ["sensor"]
 INTEGRATION_VERSION = "1.3.2"

@@ -1,13 +1,12 @@
 {
   "domain": "myopel",
   "name": "MyOpel",
-  "version": "1.3.2",
-  "documentation": "https://github.com/yourusername/myopel-ha",
-  "issue_tracker": "https://github.com/yourusername/myopel-ha/issues",
-  "requirements": ["watchdog>=2.1.0"],
-  "dependencies": ["http"],
   "codeowners": [],
-  "iot_class": "local_push",
   "config_flow": true,
-  "homeassistant": "2024.1.0"
+  "dependencies": ["http"],
+  "documentation": "https://github.com/shiner66/myopel-ha",
+  "iot_class": "local_push",
+  "issue_tracker": "https://github.com/shiner66/myopel-ha/issues",
+  "requirements": ["watchdog>=2.1.0"],
+  "version": "1.4.0"
 }

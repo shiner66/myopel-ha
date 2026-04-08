@@ -1,61 +1,172 @@
-name: Release automatica
+name: Release
 
 on:
   push:
     branches:
       - main
+      - "claude/**"
+      - "feature/**"
+      - "fix/**"
+      - "release/**"
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version without v prefix (e.g. 1.2.3 or 1.2.3-beta.1)"
+        required: true
+        type: string
 
 permissions:
   contents: write
 
 jobs:
   release:
-    name: Crea release
+    name: Create release
     runs-on: ubuntu-latest
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Leggi versione da manifest.json
-        id: version
+      # ── Determine tag, type and trigger ─────────────────────────────────────
+      - name: Determine release metadata
+        id: meta
         run: |
-          VERSION=$(jq -r '.version' custom_components/myopel/manifest.json)
-          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            VERSION="${{ github.event.inputs.version }}"
+            TAG="v${VERSION}"
+            if [[ "${VERSION}" == *"-"* ]]; then
+              echo "prerelease=true" >> "$GITHUB_OUTPUT"
+            else
+              echo "prerelease=false" >> "$GITHUB_OUTPUT"
+            fi
+            echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+            echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+            echo "trigger=manual" >> "$GITHUB_OUTPUT"
 
-      - name: Estrai note changelog per la versione corrente
-        id: changelog
-        run: |
-          VERSION="${{ steps.version.outputs.version }}"
-          # Estrai la sezione ## [X.Y.Z] fino alla prossima sezione ##
-          NOTES=$(awk "/^## \[${VERSION}\]/{found=1; next} found && /^## \[/{exit} found{print}" CHANGELOG.md)
-          # Salva su file per preservare i newline
-          echo "${NOTES}" > /tmp/release_notes.md
-          echo "notes_file=/tmp/release_notes.md" >> "$GITHUB_OUTPUT"
+          elif [[ "${{ github.ref_type }}" == "tag" ]]; then
+            TAG="${{ github.ref_name }}"
+            VERSION="${TAG#v}"
+            if [[ "${VERSION}" == *"-"* ]]; then
+              echo "prerelease=true" >> "$GITHUB_OUTPUT"
+            else
+              echo "prerelease=false" >> "$GITHUB_OUTPUT"
+            fi
+            echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+            echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+            echo "trigger=tag" >> "$GITHUB_OUTPUT"
 
-      - name: Controlla che il tag non esista già
+          elif [[ "${{ github.ref_name }}" == "main" ]]; then
+            VERSION=$(jq -r '.version' custom_components/myopel/manifest.json)
+            TAG="v${VERSION}"
+            echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+            echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+            echo "prerelease=false" >> "$GITHUB_OUTPUT"
+            echo "trigger=main" >> "$GITHUB_OUTPUT"
+
+          else
+            # Non-main branch → beta-{slug}, replaced on every push
+            BRANCH="${{ github.ref_name }}"
+            SLUG=$(echo "${BRANCH}" | tr '/' '-' | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9-]/-/g' | sed 's/-\+/-/g' | sed 's/^-\|-$//g')
+            TAG="beta-${SLUG}"
+            echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+            echo "prerelease=true" >> "$GITHUB_OUTPUT"
+            echo "trigger=branch" >> "$GITHUB_OUTPUT"
+          fi
+
+      # ── Guard: stable releases must not already have a tag ──────────────────
+      - name: Check tag does not already exist
+        if: steps.meta.outputs.trigger != 'branch'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          TAG="v${{ steps.version.outputs.version }}"
+          TAG="${{ steps.meta.outputs.tag }}"
           if gh release view "${TAG}" &>/dev/null; then
-            echo "::error::La release ${TAG} esiste già. Aggiorna la versione in manifest.json prima di fare merge su main."
+            echo "::error::Release ${TAG} already exists. Update manifest.json version before merging to main."
             exit 1
           fi
 
-      - name: Crea archivio myopel-ha.zip
-        run: |
-          cd custom_components
-          zip -r ../myopel-ha.zip myopel/
-          cd ..
-
-      - name: Crea release GitHub
+      # ── For branch betas, delete the previous release with the same tag ─────
+      - name: Delete previous beta release (branch only)
+        if: steps.meta.outputs.trigger == 'branch'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          TAG="v${{ steps.version.outputs.version }}"
+          TAG="${{ steps.meta.outputs.tag }}"
+          gh release delete "${TAG}" --yes 2>/dev/null || true
+          git push origin --delete "${TAG}" 2>/dev/null || true
+
+      # ── Build zip ────────────────────────────────────────────────────────────
+      - name: Build myopel-ha.zip
+        run: |
+          cd custom_components
+          zip -r ../myopel-ha.zip myopel/
+
+      # ── Generate release notes ───────────────────────────────────────────────
+      - name: Generate release notes (stable)
+        if: steps.meta.outputs.trigger != 'branch'
+        run: |
+          VERSION="${{ steps.meta.outputs.version }}"
+          if [[ -f CHANGELOG.md ]]; then
+            NOTES=$(awk "/^## \[${VERSION}\]/{found=1; next} found && /^## \[/{exit} found{print}" CHANGELOG.md)
+          fi
+          printf '%s' "${NOTES:-No changelog entry found for ${VERSION}.}" > /tmp/release_notes.md
+
+      - name: Generate release notes (beta branch)
+        if: steps.meta.outputs.trigger == 'branch'
+        run: |
+          BRANCH="${{ github.ref_name }}"
+          cat > /tmp/release_notes.md << EOF
+          Automated beta from branch \`${BRANCH}\`
+
+          > This is a development pre-release — do not use in production.
+
+          **Manual HACS installation:**
+          1. Download \`myopel-ha.zip\`
+          2. Extract the \`myopel\` folder into \`config/custom_components/\`
+          3. Restart Home Assistant
+          EOF
+
+      # ── Create release ───────────────────────────────────────────────────────
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="${{ steps.meta.outputs.tag }}"
+          PRERELEASE_FLAG=""
+          LATEST_FLAG=""
+          if [[ "${{ steps.meta.outputs.prerelease }}" == "true" ]]; then
+            PRERELEASE_FLAG="--prerelease"
+          else
+            LATEST_FLAG="--latest"
+          fi
           gh release create "${TAG}" \
             myopel-ha.zip \
             --title "MyOpel ${TAG}" \
-            --notes-file "${{ steps.changelog.outputs.notes_file }}" \
-            --latest
+            --notes-file /tmp/release_notes.md \
+            ${PRERELEASE_FLAG} \
+            ${LATEST_FLAG} \
+            --target "${{ github.sha }}"
+
+      # ── Auto-bump patch version after stable main release ────────────────────
+      - name: Bump patch version in manifest.json
+        if: steps.meta.outputs.trigger == 'main'
+        run: |
+          VERSION="${{ steps.meta.outputs.version }}"
+          IFS='.' read -r -a PARTS <<< "${VERSION}"
+          NEW_VERSION="${PARTS[0]}.${PARTS[1]}.$((${PARTS[2]} + 1))"
+          jq ".version = \"${NEW_VERSION}\"" custom_components/myopel/manifest.json > /tmp/manifest.json
+          mv /tmp/manifest.json custom_components/myopel/manifest.json
+          echo "Bumped ${VERSION} → ${NEW_VERSION}"
+
+      - name: Commit version bump back to main
+        if: steps.meta.outputs.trigger == 'main'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add custom_components/myopel/manifest.json
+          git commit -m "chore: bump version to $(jq -r '.version' custom_components/myopel/manifest.json) [skip ci]"
+          git push origin main

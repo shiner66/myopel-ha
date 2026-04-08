@@ -15,6 +15,7 @@ from homeassistant.components.sensor import (
     SensorStateClass,
 )
 from homeassistant.config_entries import ConfigEntry
+from .const import CONF_TIME_OFFSET, DEFAULT_TIME_OFFSET
 from homeassistant.const import (
     PERCENTAGE,
     UnitOfLength,
@@ -389,7 +390,7 @@ async def async_setup_entry(
     vin = coordinator.data.get("vin", "unknown")
 
     entities: list = [
-        MyOpelSensor(coordinator, description, vin, entry.entry_id)
+        MyOpelSensor(coordinator, description, vin, entry)
         for description in SENSOR_DESCRIPTIONS
     ]
     entities.append(MyOpelAlertActiveBinarySensor(coordinator, vin, entry.entry_id))
@@ -407,12 +408,13 @@ class MyOpelSensor(CoordinatorEntity[MyOpelCoordinator], SensorEntity):
         coordinator: MyOpelCoordinator,
         description: MyOpelSensorDescription,
         vin: str,
-        entry_id: str,
+        entry: ConfigEntry,
     ) -> None:
         super().__init__(coordinator)
         self.entity_description = description
         self._vin = vin
-        self._attr_unique_id = f"{entry_id}_{description.key}"
+        self._entry = entry
+        self._attr_unique_id = f"{entry.entry_id}_{description.key}"
         self._attr_device_info = DeviceInfo(
             identifiers={(DOMAIN, vin)},
             name=f"Opel ({vin[-6:]})",
@@ -433,18 +435,21 @@ class MyOpelSensor(CoordinatorEntity[MyOpelCoordinator], SensorEntity):
 
         # Convert ISO timestamp strings to datetime objects for timestamp sensors.
         # NOTE: Stellantis/.myop files mark timestamps with "Z" (UTC) but the value is always
-        # CET (UTC+1) — even in summer. The server does NOT adjust for DST (CEST = UTC+2).
-        # Using a fixed UTC+1 offset gives the correct display in both winter and summer:
-        # the card then converts UTC → local time (CEST in summer) correctly.
+        # in the server's local wall-clock time — even in summer. The server does NOT adjust
+        # for DST. The offset is user-configurable: 1 = CET (winter), 2 = CEST (summer).
         if (
             self.entity_description.device_class == SensorDeviceClass.TIMESTAMP
             and isinstance(value, str)
         ):
             from datetime import datetime, timezone, timedelta
             try:
+                offset_hours = self._entry.options.get(
+                    CONF_TIME_OFFSET,
+                    self._entry.data.get(CONF_TIME_OFFSET, DEFAULT_TIME_OFFSET),
+                )
                 naive = datetime.fromisoformat(value.rstrip("Z"))
-                cet = timezone(timedelta(hours=1))
-                return naive.replace(tzinfo=cet)
+                tz = timezone(timedelta(hours=int(offset_hours)))
+                return naive.replace(tzinfo=tz)
             except (ValueError, AttributeError):
                 return None
 

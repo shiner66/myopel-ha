@@ -1,0 +1,59 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "MyOpel file folder",
+        "description": "Enter the path to the folder where .myop or trips.json files are saved.\nIt will be created automatically if it does not exist.\nExample: {example}",
+        "data": {
+          "file_path": "Folder path"
+        }
+      },
+      "imap": {
+        "title": "Auto-download via email (optional)",
+        "description": "Configure an IMAP email account to automatically download attached .myop files.\nLeave the server empty to skip and upload files manually.",
+        "data": {
+          "imap_server": "IMAP server (e.g. imap.gmail.com) — leave empty to skip",
+          "imap_port": "Port (default 993)",
+          "imap_username": "Email address",
+          "imap_password": "Password / App password",
+          "imap_folder": "IMAP folder (default INBOX)",
+          "imap_sender": "Filter by sender (optional, e.g. myopel@stellantis.com)",
+          "imap_interval": "Email check interval (seconds)"
+        }
+      }
+    },
+    "error": {
+      "not_a_directory": "The path does not point to a folder.",
+      "invalid_json": "The file found is not valid JSON.",
+      "invalid_format": "The file found is not a valid MyOpel export.",
+      "imap_cannot_connect": "Cannot connect to the IMAP server. Check server and port.",
+      "imap_auth_failed": "Invalid IMAP credentials. Check email and password.",
+      "imap_folder_not_found": "IMAP folder not found."
+    },
+    "abort": {
+      "already_configured": "This vehicle is already configured."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "MyOpel Options",
+        "data": {
+          "file_path": "Folder path (leave empty to keep current)",
+          "scan_interval": "Fallback file polling interval (seconds)",
+          "min_trip_distance_enabled": "Ignore short trips as last trip",
+          "min_trip_distance": "Minimum last-trip distance (km)",
+          "time_offset": "Timestamp UTC offset correction (hours, e.g. 1=CET winter, 2=CEST summer)",
+          "imap_disabled": "Disable automatic email download (IMAP)",
+          "imap_server": "IMAP server",
+          "imap_port": "IMAP port",
+          "imap_username": "Email address",
+          "imap_password": "Password / App password",
+          "imap_folder": "IMAP folder",
+          "imap_sender": "Filter by sender",
+          "imap_interval": "Email check interval (seconds)"
+        }
+      }
+    }
+  }
+}

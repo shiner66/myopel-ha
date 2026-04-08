@@ -43,6 +43,7 @@
           "scan_interval": "Intervallo lettura file fallback (secondi)",
           "min_trip_distance_enabled": "Ignora viaggi corti come ultimo viaggio",
           "min_trip_distance": "Distanza minima ultimo viaggio (km)",
+          "time_offset": "Correzione orario timestamp (ore UTC, es. 1=CET invernale, 2=CEST estivo)",
           "imap_disabled": "Disabilita download automatico via email (IMAP)",
           "imap_server": "Server IMAP",
           "imap_port": "Porta IMAP",

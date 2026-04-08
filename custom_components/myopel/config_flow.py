@@ -11,6 +11,7 @@ import voluptuous as vol
 from homeassistant.config_entries import ConfigEntry, ConfigFlow, OptionsFlow
 from homeassistant.core import callback
 from homeassistant.data_entry_flow import FlowResult
+from homeassistant.helpers import selector
 
 from .const import (
     CONF_FILE_PATH,
@@ -25,11 +26,13 @@ from .const import (
     CONF_MIN_TRIP_DISTANCE,
     CONF_MIN_TRIP_DISTANCE_ENABLED,
     CONF_SCAN_INTERVAL,
+    CONF_TIME_OFFSET,
     DEFAULT_IMAP_FOLDER,
     DEFAULT_IMAP_INTERVAL,
     DEFAULT_IMAP_PORT,
     DEFAULT_MIN_TRIP_DISTANCE,
     DEFAULT_SCAN_INTERVAL,
+    DEFAULT_TIME_OFFSET,
     DOMAIN,
 )
 
@@ -268,6 +271,15 @@ class MyOpelOptionsFlow(OptionsFlow):
                     CONF_MIN_TRIP_DISTANCE,
                     default=o.get(CONF_MIN_TRIP_DISTANCE, DEFAULT_MIN_TRIP_DISTANCE),
                 ): vol.All(vol.Coerce(float), vol.Range(min=0.1, max=50.0)),
+                vol.Optional(
+                    CONF_TIME_OFFSET,
+                    default=o.get(CONF_TIME_OFFSET, DEFAULT_TIME_OFFSET),
+                ): selector.NumberSelector(
+                    selector.NumberSelectorConfig(
+                        min=-12, max=14, step=1,
+                        mode=selector.NumberSelectorMode.BOX,
+                    )
+                ),
                 vol.Optional(
                     CONF_IMAP_DISABLED,
                     default=o.get(CONF_IMAP_DISABLED, False),

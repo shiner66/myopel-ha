@@ -3,10 +3,14 @@
   "name": "MyOpel",
   "codeowners": [],
   "config_flow": true,
-  "dependencies": ["http"],
+  "dependencies": [
+    "http"
+  ],
   "documentation": "https://github.com/shiner66/myopel-ha",
   "iot_class": "local_push",
   "issue_tracker": "https://github.com/shiner66/myopel-ha/issues",
-  "requirements": ["watchdog>=2.1.0"],
-  "version": "1.4.0"
+  "requirements": [
+    "watchdog>=2.1.0"
+  ],
+  "version": "1.4.1"
 }

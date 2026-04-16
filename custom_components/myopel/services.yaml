@@ -1,9 +1,8 @@
 acknowledge_alert:
   name: Conferma alert
   description: >-
-    Conferma (acknowledge) un singolo codice alert sull'ultimo viaggio.
-    L'alert resta visibile nella card ma non farà più scattare il sensore
-    binario "Alert presenti".
+    Conferma (acknowledge) un singolo codice alert. L'alert resta visibile
+    nella card ma non farà più scattare il sensore binario "Alert presenti".
   fields:
     alert_code:
       name: Codice alert
@@ -14,11 +13,25 @@ acknowledge_alert:
           min: 0
           max: 999
           mode: box
+    scope:
+      name: Ambito
+      description: >-
+        Ambito a cui applicare l'ack: "last_trip" (solo ultimo viaggio),
+        "today" (tutti i viaggi di oggi), "month" (mese corrente), "total"
+        (tutto lo storico). Default: last_trip.
+      required: false
+      default: last_trip
+      selector:
+        select:
+          options:
+            - last_trip
+            - today
+            - month
+            - total
     trip_id:
       name: ID viaggio
       description: >-
-        ID del viaggio a cui riferire l'ack. Se omesso, viene usato
-        l'ultimo viaggio disponibile.
+        Forza l'ack su uno specifico viaggio, ignorando `scope`.
       required: false
       selector:
         number:
@@ -37,14 +50,26 @@ acknowledge_alert:
 acknowledge_all_alerts:
   name: Conferma tutti gli alert
   description: >-
-    Conferma tutti i codici alert dell'ultimo viaggio. Gli alert restano
+    Conferma tutti i codici alert nell'ambito indicato. Gli alert restano
     visibili ma il sensore binario "Alert presenti" torna a OFF.
   fields:
+    scope:
+      name: Ambito
+      description: >-
+        Ambito: "last_trip" (default), "today", "month" o "total".
+      required: false
+      default: last_trip
+      selector:
+        select:
+          options:
+            - last_trip
+            - today
+            - month
+            - total
     trip_id:
       name: ID viaggio
       description: >-
-        ID del viaggio su cui confermare tutti gli alert. Se omesso,
-        viene usato l'ultimo viaggio disponibile.
+        Forza l'ack su uno specifico viaggio (ignora `scope`).
       required: false
       selector:
         number:
@@ -73,9 +98,23 @@ unacknowledge_alert:
           min: 0
           max: 999
           mode: box
+    scope:
+      name: Ambito
+      description: >-
+        Ambito: "last_trip" (default), "today", "month" o "total".
+      required: false
+      default: last_trip
+      selector:
+        select:
+          options:
+            - last_trip
+            - today
+            - month
+            - total
     trip_id:
       name: ID viaggio
-      description: ID del viaggio (facoltativo, default = ultimo viaggio).
+      description: >-
+        Forza il ripristino su uno specifico viaggio (ignora `scope`).
       required: false
       selector:
         number:

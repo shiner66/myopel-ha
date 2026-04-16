@@ -9,6 +9,7 @@ class MyOpelCard extends LitElement {
     _view360Idx:   { state: true },
     _use360:       { state: true },
     _showAcked:    { state: true },
+    _periodView:   { state: true },
   };
 
   static styles = css`
@@ -426,7 +427,8 @@ class MyOpelCard extends LitElement {
     this._config = config;
     this._tab    = "trip";
     this._refuelView = false;
-    this._showAcked  = false;
+    this._showAcked  = {};
+    this._periodView = "month";
     this._leafletMap = null;
     this._leafletMarker = null;
     this._view360Idx = 0;
@@ -660,16 +662,30 @@ class MyOpelCard extends LitElement {
   }
 
   // ── Alert acknowledgment helpers ─────────────────────────────────────────
-  _alertInfo() {
-    // Prefer the "unack" sensor (it carries full attributes including labels),
-    // fall back to the binary sensor for legacy layouts.
+  // Each scope maps to the sensor whose attributes carry the full ack data
+  // (all_codes, unacknowledged_codes, acknowledged_codes, code_labels, entry_id).
+  _scopeSensorSuffix(scope) {
+    switch (scope) {
+      case "today":     return "oggi_codici_alert";
+      case "month":     return "mese_corrente_codici_alert";
+      case "total":     return "totale_riepilogo_codici_alert";
+      case "last_trip":
+      default:          return "ultimo_viaggio_alert_non_letti_codici";
+    }
+  }
+
+  _alertInfo(scope = "last_trip") {
     const prefix = this._prefix();
-    const unack = this._hass?.states[`sensor.${prefix}_ultimo_viaggio_alert_non_letti_codici`];
-    const bin   = this._hass?.states[`binary_sensor.${prefix}_ultimo_viaggio_alert_presenti`];
-    const src   = unack || bin;
+    const suffix = this._scopeSensorSuffix(scope);
+    let src = this._hass?.states[`sensor.${prefix}_${suffix}`];
+    if (!src && scope === "last_trip") {
+      // Legacy fallback to the binary sensor
+      src = this._hass?.states[`binary_sensor.${prefix}_ultimo_viaggio_alert_presenti`];
+    }
     if (!src) return null;
     const a = src.attributes || {};
     return {
+      scope,
       tripId:   a.trip_id ?? null,
       entryId:  a.entry_id ?? null,
       all:      Array.isArray(a.all_codes) ? a.all_codes : [],
@@ -683,34 +699,47 @@ class MyOpelCard extends LitElement {
     return info.labels?.[String(code)] ?? `Codice ${code}`;
   }
 
-  async _ackAlert(code) {
-    const info = this._alertInfo();
+  async _ackAlert(scope, code) {
+    const info = this._alertInfo(scope);
     if (!info) return;
     await this._hass.callService("myopel", "acknowledge_alert", {
       alert_code: Number(code),
-      ...(info.tripId != null ? { trip_id: Number(info.tripId) } : {}),
+      scope,
+      ...(scope === "last_trip" && info.tripId != null ? { trip_id: Number(info.tripId) } : {}),
       ...(info.entryId ? { entry_id: info.entryId } : {}),
     });
   }
 
-  async _ackAllAlerts() {
-    const info = this._alertInfo();
+  async _ackAllAlerts(scope) {
+    const info = this._alertInfo(scope);
     if (!info || info.unack.length === 0) return;
     await this._hass.callService("myopel", "acknowledge_all_alerts", {
-      ...(info.tripId != null ? { trip_id: Number(info.tripId) } : {}),
+      scope,
+      ...(scope === "last_trip" && info.tripId != null ? { trip_id: Number(info.tripId) } : {}),
+      ...(info.entryId ? { entry_id: info.entryId } : {}),
+    });
+  }
+
+  async _unackAlert(scope, code) {
+    const info = this._alertInfo(scope);
+    if (!info) return;
+    await this._hass.callService("myopel", "unacknowledge_alert", {
+      alert_code: Number(code),
+      scope,
+      ...(scope === "last_trip" && info.tripId != null ? { trip_id: Number(info.tripId) } : {}),
       ...(info.entryId ? { entry_id: info.entryId } : {}),
     });
   }
 
   async _resetAcks() {
-    const info = this._alertInfo();
+    const info = this._alertInfo("last_trip");
     await this._hass.callService("myopel", "reset_alert_acknowledgments", {
       ...(info?.entryId ? { entry_id: info.entryId } : {}),
     });
   }
 
-  _renderAlertList() {
-    const info = this._alertInfo();
+  _renderAlertList(scope = "last_trip") {
+    const info = this._alertInfo(scope);
     if (!info || info.all.length === 0) {
       return html`<div class="op-row" style="padding:8px 6px;border-bottom:none;">
         <div class="op-row-left">
@@ -721,23 +750,24 @@ class MyOpelCard extends LitElement {
       </div>`;
     }
 
+    const showAcked = !!this._showAcked?.[scope];
     const unackItems = info.unack.map(code => html`
       <div class="op-alert-item">
         <span class="op-alert-item-label">⚠️ ${this._alertLabel(info, code)}</span>
         <span class="op-alert-ack-btn"
               title="Conferma — resta visibile ma non farà più scattare l'allarme"
-              @click=${(e) => { e.stopPropagation(); this._ackAlert(code); }}>
+              @click=${(e) => { e.stopPropagation(); this._ackAlert(scope, code); }}>
           ✓ Conferma
         </span>
       </div>
     `);
 
-    const ackedItems = (this._showAcked ? info.acked : []).map(code => html`
+    const ackedItems = (showAcked ? info.acked : []).map(code => html`
       <div class="op-alert-item acked">
         <span class="op-alert-item-label">${this._alertLabel(info, code)}</span>
         <span class="op-alert-ack-btn restore"
               title="Ripristina — torna a segnalarlo come attivo"
-              @click=${(e) => { e.stopPropagation(); this._unackAlert(code); }}>
+              @click=${(e) => { e.stopPropagation(); this._unackAlert(scope, code); }}>
           ↺ Ripristina
         </span>
       </div>
@@ -760,33 +790,26 @@ class MyOpelCard extends LitElement {
         ${unackItems.length > 1 ? html`
           <div class="op-alert-ack-all">
             <span class="op-alert-ack-btn"
-                  @click=${(e) => { e.stopPropagation(); this._ackAllAlerts(); }}>
+                  @click=${(e) => { e.stopPropagation(); this._ackAllAlerts(scope); }}>
               ✓✓ Conferma tutti
             </span>
           </div>` : nothing}
         ${hasAcked ? html`
           <div class="op-acked-toggle"
-               @click=${(e) => { e.stopPropagation(); this._showAcked = !this._showAcked; }}>
-            ${this._showAcked
+               @click=${(e) => {
+                 e.stopPropagation();
+                 this._showAcked = { ...this._showAcked, [scope]: !showAcked };
+               }}>
+            ${showAcked
               ? `▲ Nascondi ${info.acked.length} confermati`
               : `▼ Mostra ${info.acked.length} alert confermati`}
           </div>
-          ${this._showAcked
+          ${showAcked
             ? html`<div class="op-alert-list">${ackedItems}</div>`
             : nothing}
         ` : nothing}
       </div>
     `;
-  }
-
-  async _unackAlert(code) {
-    const info = this._alertInfo();
-    if (!info) return;
-    await this._hass.callService("myopel", "unacknowledge_alert", {
-      alert_code: Number(code),
-      ...(info.tripId != null ? { trip_id: Number(info.tripId) } : {}),
-      ...(info.entryId ? { entry_id: info.entryId } : {}),
-    });
   }
 
   // ── Render: Hero ──────────────────────────────────────────────────────────
@@ -884,7 +907,7 @@ class MyOpelCard extends LitElement {
         </div>
 
         ${(() => {
-          const info = this._alertInfo();
+          const info = this._alertInfo("last_trip");
           if (!info || info.unack.length === 0) return nothing;
           const first = this._alertLabel(info, info.unack[0]);
           const extra = info.unack.length > 1 ? ` +${info.unack.length - 1}` : "";
@@ -1075,14 +1098,43 @@ class MyOpelCard extends LitElement {
       ${this._row("⛽","Prezzo al litro",     this._fmt("prezzo_carburante")," €/L","prezzo_carburante")}
       ${this._row("🕐","Partenza",            this._fmtDate("ultimo_viaggio_inizio"),"","ultimo_viaggio_inizio")}
       ${this._row("🏁","Arrivo",              this._fmtDate("ultimo_viaggio_fine"),"","ultimo_viaggio_fine")}
-      ${this._renderAlertList()}
+      ${this._renderAlertList("last_trip")}
     </div>`;
   }
 
-  // ── Tab: Mese ─────────────────────────────────────────────────────────────
-  _renderMonth() {
+  // ── Tab: Oggi | Mese ─────────────────────────────────────────────────────
+  _renderPeriodSwitch() {
+    const isToday = this._periodView === "today";
+    return html`
+      <div class="op-refuel-toggle" @click=${() => { this._periodView = isToday ? "month" : "today"; }}>
+        <div class="op-refuel-toggle-label ${isToday ? 'active' : ''}">
+          ${isToday ? "📅 Oggi" : "🗓 Mese corrente"}
+        </div>
+        <span class="op-refuel-pill">${isToday ? "🗓 Mese" : "📅 Oggi"}</span>
+      </div>
+    `;
+  }
+
+  _renderToday() {
     return html`<div class="op-body">
-      <div class="op-section-label">Mese corrente</div>
+      ${this._renderPeriodSwitch()}
+      <div class="op-grid">
+        ${this._tile("🗓","Viaggi","oggi_viaggi","",0)}
+        ${this._tile("📍","Distanza","oggi_distanza","km",1)}
+        ${this._tile("⏱","Min. guida","oggi_durata_guida","min",0)}
+        ${this._tile("🏎","Vel. media","oggi_velocita_media","km/h",1)}
+      </div>
+      ${this._row("⛽","Carburante totale",this._fmt("oggi_carburante_totale")," L","oggi_carburante_totale")}
+      ${this._row("📈","Consumo medio",    this._fmt("oggi_consumo_medio")," km/L","oggi_consumo_medio")}
+      ${this._row("💶","Costo stimato",    this._fmt("oggi_costo_stimato")," €","oggi_costo_stimato")}
+      ${this._renderAlertList("today")}
+    </div>`;
+  }
+
+  _renderMonth() {
+    if (this._periodView === "today") return this._renderToday();
+    return html`<div class="op-body">
+      ${this._renderPeriodSwitch()}
       <div class="op-grid">
         ${this._tile("🗓","Viaggi","mese_corrente_viaggi","",0)}
         ${this._tile("📍","Distanza","mese_corrente_distanza","km",1)}
@@ -1092,7 +1144,7 @@ class MyOpelCard extends LitElement {
       ${this._row("⛽","Carburante totale",this._fmt("mese_corrente_carburante_totale")," L","mese_corrente_carburante_totale")}
       ${this._row("📈","Consumo medio",    this._fmt("mese_corrente_consumo_medio")," km/L","mese_corrente_consumo_medio")}
       ${this._row("💶","Costo stimato",    this._fmt("mese_corrente_costo_stimato")," €","mese_corrente_costo_stimato")}
-      ${this._alertBlock("mese_corrente_alert", "mese_corrente_codici_alert")}
+      ${this._renderAlertList("month")}
     </div>`;
   }
 
@@ -1143,7 +1195,7 @@ class MyOpelCard extends LitElement {
       ${this._row("⛽","Carburante totale",this._fmt("totale_carburante_consumato")," L","totale_carburante_consumato")}
       ${this._row("📈","Consumo medio",    this._fmt("totale_consumo_medio")," km/L","totale_consumo_medio")}
       ${this._row("💶","Costo totale",     this._fmt("totale_costo_stimato")," €","totale_costo_stimato")}
-      ${this._alertBlock("totale_alert", "totale_riepilogo_codici_alert")}
+      ${this._renderAlertList("total")}
     </div>`;
   }
 

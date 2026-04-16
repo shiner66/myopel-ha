@@ -7,23 +7,34 @@ Tutte le modifiche rilevanti a questa integrazione sono documentate qui.
 ## [Unreleased]
 
 ### Aggiunte
-- **Acknowledgment degli alert**: ora è possibile "confermare" gli alert segnalati
-  dall'ultimo viaggio. Un alert confermato non fa più scattare il binary sensor
+- **Acknowledgment degli alert**: ora è possibile "confermare" gli alert
+  segnalati. Un alert confermato non fa più scattare il binary sensor
   *"Alert presenti"* ma resta visibile nella card (sezione comprimibile
   *"Mostra N alert confermati"*).
   - Nuovi servizi: `myopel.acknowledge_alert`, `myopel.acknowledge_all_alerts`,
     `myopel.unacknowledge_alert`, `myopel.reset_alert_acknowledgments`.
-  - Nuovi sensori: *"Ultimo viaggio – Alert non letti"* (numero) e
-    *"Ultimo viaggio – Alert non letti (codici)"* (etichette).
+  - I servizi accettano il parametro `scope` (`last_trip`, `today`, `month`,
+    `total`) per applicare l'ack a tutti i viaggi di quell'ambito in un colpo
+    solo; default `last_trip` per retro-compatibilità.
+  - Ack disponibile su **tutte le tab** della card (Viaggio, Mese/Oggi,
+    Totali), non solo sull'ultimo viaggio.
+  - Nuovi sensori: *"Ultimo viaggio – Alert non letti"* (numero) ed etichette,
+    più versioni equivalenti per mese/oggi
+    (`mese_corrente_alert_non_letti`, `oggi_alert_non_letti`).
   - Nuovi attributi sugli entity relativi agli alert: `all_codes`,
     `acknowledged_codes`, `unacknowledged_codes`, `code_labels`, `trip_id`,
-    `entry_id`.
+    `entry_id`, `scope`, `code_to_trips`.
   - Persistenza tramite `homeassistant.helpers.storage.Store` (sopravvive ai
     riavvii). L'acknowledgment è legato alla coppia `(trip_id, code)`:
     se lo stesso codice ricompare in un nuovo viaggio torna a essere segnalato.
 - **Card Lovelace**: ogni alert attivo ha ora un pulsante "✓ Conferma";
   se più alert sono attivi compare "✓✓ Conferma tutti". Gli alert confermati
   si possono ri-espandere e ripristinare con "↺ Ripristina".
+- **Sezione "Oggi"**: aggregazione dei viaggi della giornata corrente
+  (distanza, durata, consumo, costo, alert). Accessibile tramite uno switch
+  nella tab *Mese* che permette di passare tra vista *Oggi* e *Mese corrente*
+  senza aggiungere una nuova tab. Nuovi sensori `oggi_*` analoghi a quelli
+  del mese.
 
 ### Modifiche
 - Il binary sensor *"Ultimo viaggio – Alert presenti"* ora riflette gli alert

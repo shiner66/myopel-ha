@@ -49,3 +49,11 @@ SERVICE_RESET_ACKS = "reset_alert_acknowledgments"
 ATTR_ALERT_CODE = "alert_code"
 ATTR_TRIP_ID = "trip_id"
 ATTR_ENTRY_ID = "entry_id"
+ATTR_SCOPE = "scope"
+
+# Alert scopes (used by services to target an aggregation window)
+SCOPE_LAST_TRIP = "last_trip"
+SCOPE_TODAY = "today"
+SCOPE_MONTH = "month"
+SCOPE_TOTAL = "total"
+SCOPES = (SCOPE_LAST_TRIP, SCOPE_TODAY, SCOPE_MONTH, SCOPE_TOTAL)

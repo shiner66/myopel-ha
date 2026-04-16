@@ -59,15 +59,19 @@
   "services": {
     "acknowledge_alert": {
       "name": "Acknowledge alert",
-      "description": "Acknowledge a single alert code on the last trip: it stays visible but no longer trips the binary sensor.",
+      "description": "Acknowledge a single alert code in the chosen scope: it stays visible but no longer trips the binary sensor.",
       "fields": {
         "alert_code": {
           "name": "Alert code",
           "description": "Numeric alert code to acknowledge."
         },
+        "scope": {
+          "name": "Scope",
+          "description": "Scope to apply the ack to: last_trip, today, month, total."
+        },
         "trip_id": {
           "name": "Trip ID",
-          "description": "Trip ID to tie the ack to. Leave empty to use the last trip."
+          "description": "Force the ack on a specific trip (overrides `scope`)."
         },
         "entry_id": {
           "name": "Entry ID",
@@ -77,11 +81,15 @@
     },
     "acknowledge_all_alerts": {
       "name": "Acknowledge all alerts",
-      "description": "Acknowledge all alerts on the last trip.",
+      "description": "Acknowledge all alerts within the chosen scope.",
       "fields": {
+        "scope": {
+          "name": "Scope",
+          "description": "Scope: last_trip, today, month or total."
+        },
         "trip_id": {
           "name": "Trip ID",
-          "description": "Specific trip ID (optional)."
+          "description": "Force the ack on a specific trip (overrides `scope`)."
         },
         "entry_id": {
           "name": "Entry ID",
@@ -97,9 +105,13 @@
           "name": "Alert code",
           "description": "Numeric code of the alert to restore."
         },
+        "scope": {
+          "name": "Scope",
+          "description": "Scope: last_trip, today, month or total."
+        },
         "trip_id": {
           "name": "Trip ID",
-          "description": "Trip ID (optional)."
+          "description": "Force the restore on a specific trip (overrides `scope`)."
         },
         "entry_id": {
           "name": "Entry ID",

@@ -59,15 +59,19 @@
   "services": {
     "acknowledge_alert": {
       "name": "Conferma alert",
-      "description": "Conferma un singolo codice alert dell'ultimo viaggio: resta visibile ma non fa più scattare il sensore.",
+      "description": "Conferma un singolo codice alert nell'ambito scelto: resta visibile ma non fa più scattare il sensore.",
       "fields": {
         "alert_code": {
           "name": "Codice alert",
           "description": "Codice numerico dell'alert da confermare."
         },
+        "scope": {
+          "name": "Ambito",
+          "description": "Ambito su cui applicare l'ack: last_trip, today, month, total."
+        },
         "trip_id": {
           "name": "ID viaggio",
-          "description": "ID del viaggio a cui riferire l'ack. Lascia vuoto per usare l'ultimo viaggio."
+          "description": "Forza l'ack su uno specifico viaggio (ignora `scope`)."
         },
         "entry_id": {
           "name": "Entry ID",
@@ -77,11 +81,15 @@
     },
     "acknowledge_all_alerts": {
       "name": "Conferma tutti gli alert",
-      "description": "Conferma tutti gli alert dell'ultimo viaggio.",
+      "description": "Conferma tutti gli alert nell'ambito scelto.",
       "fields": {
+        "scope": {
+          "name": "Ambito",
+          "description": "Ambito: last_trip, today, month o total."
+        },
         "trip_id": {
           "name": "ID viaggio",
-          "description": "ID viaggio specifico (facoltativo)."
+          "description": "Forza l'ack su uno specifico viaggio (ignora `scope`)."
         },
         "entry_id": {
           "name": "Entry ID",
@@ -97,9 +105,13 @@
           "name": "Codice alert",
           "description": "Codice numerico dell'alert da ripristinare."
         },
+        "scope": {
+          "name": "Ambito",
+          "description": "Ambito: last_trip, today, month o total."
+        },
         "trip_id": {
           "name": "ID viaggio",
-          "description": "ID del viaggio (facoltativo)."
+          "description": "Forza il ripristino su uno specifico viaggio (ignora `scope`)."
         },
         "entry_id": {
           "name": "Entry ID",

@@ -55,5 +55,67 @@
         }
       }
     }
+  },
+  "services": {
+    "acknowledge_alert": {
+      "name": "Conferma alert",
+      "description": "Conferma un singolo codice alert dell'ultimo viaggio: resta visibile ma non fa più scattare il sensore.",
+      "fields": {
+        "alert_code": {
+          "name": "Codice alert",
+          "description": "Codice numerico dell'alert da confermare."
+        },
+        "trip_id": {
+          "name": "ID viaggio",
+          "description": "ID del viaggio a cui riferire l'ack. Lascia vuoto per usare l'ultimo viaggio."
+        },
+        "entry_id": {
+          "name": "Entry ID",
+          "description": "ID della config entry (solo se hai più veicoli)."
+        }
+      }
+    },
+    "acknowledge_all_alerts": {
+      "name": "Conferma tutti gli alert",
+      "description": "Conferma tutti gli alert dell'ultimo viaggio.",
+      "fields": {
+        "trip_id": {
+          "name": "ID viaggio",
+          "description": "ID viaggio specifico (facoltativo)."
+        },
+        "entry_id": {
+          "name": "Entry ID",
+          "description": "ID della config entry (facoltativo)."
+        }
+      }
+    },
+    "unacknowledge_alert": {
+      "name": "Ripristina alert",
+      "description": "Annulla la conferma di un alert: torna a essere segnalato come attivo.",
+      "fields": {
+        "alert_code": {
+          "name": "Codice alert",
+          "description": "Codice numerico dell'alert da ripristinare."
+        },
+        "trip_id": {
+          "name": "ID viaggio",
+          "description": "ID del viaggio (facoltativo)."
+        },
+        "entry_id": {
+          "name": "Entry ID",
+          "description": "ID della config entry (facoltativo)."
+        }
+      }
+    },
+    "reset_alert_acknowledgments": {
+      "name": "Reset conferme alert",
+      "description": "Cancella tutte le conferme memorizzate.",
+      "fields": {
+        "entry_id": {
+          "name": "Entry ID",
+          "description": "ID della config entry (facoltativo)."
+        }
+      }
+    }
   }
 }

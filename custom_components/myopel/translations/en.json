@@ -55,5 +55,67 @@
         }
       }
     }
+  },
+  "services": {
+    "acknowledge_alert": {
+      "name": "Acknowledge alert",
+      "description": "Acknowledge a single alert code on the last trip: it stays visible but no longer trips the binary sensor.",
+      "fields": {
+        "alert_code": {
+          "name": "Alert code",
+          "description": "Numeric alert code to acknowledge."
+        },
+        "trip_id": {
+          "name": "Trip ID",
+          "description": "Trip ID to tie the ack to. Leave empty to use the last trip."
+        },
+        "entry_id": {
+          "name": "Entry ID",
+          "description": "Config entry ID (useful with multiple vehicles)."
+        }
+      }
+    },
+    "acknowledge_all_alerts": {
+      "name": "Acknowledge all alerts",
+      "description": "Acknowledge all alerts on the last trip.",
+      "fields": {
+        "trip_id": {
+          "name": "Trip ID",
+          "description": "Specific trip ID (optional)."
+        },
+        "entry_id": {
+          "name": "Entry ID",
+          "description": "Config entry ID (optional)."
+        }
+      }
+    },
+    "unacknowledge_alert": {
+      "name": "Restore alert",
+      "description": "Un-acknowledge an alert: it becomes active again.",
+      "fields": {
+        "alert_code": {
+          "name": "Alert code",
+          "description": "Numeric code of the alert to restore."
+        },
+        "trip_id": {
+          "name": "Trip ID",
+          "description": "Trip ID (optional)."
+        },
+        "entry_id": {
+          "name": "Entry ID",
+          "description": "Config entry ID (optional)."
+        }
+      }
+    },
+    "reset_alert_acknowledgments": {
+      "name": "Reset alert acknowledgments",
+      "description": "Clears all stored acknowledgments.",
+      "fields": {
+        "entry_id": {
+          "name": "Entry ID",
+          "description": "Config entry ID (optional)."
+        }
+      }
+    }
   }
 }

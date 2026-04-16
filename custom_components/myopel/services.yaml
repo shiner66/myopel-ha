@@ -1,0 +1,103 @@
+acknowledge_alert:
+  name: Conferma alert
+  description: >-
+    Conferma (acknowledge) un singolo codice alert sull'ultimo viaggio.
+    L'alert resta visibile nella card ma non farà più scattare il sensore
+    binario "Alert presenti".
+  fields:
+    alert_code:
+      name: Codice alert
+      description: Codice numerico dell'alert da confermare (es. 52 per pressione pneumatici).
+      required: true
+      selector:
+        number:
+          min: 0
+          max: 999
+          mode: box
+    trip_id:
+      name: ID viaggio
+      description: >-
+        ID del viaggio a cui riferire l'ack. Se omesso, viene usato
+        l'ultimo viaggio disponibile.
+      required: false
+      selector:
+        number:
+          min: 0
+          max: 100000000
+          mode: box
+    entry_id:
+      name: Entry ID
+      description: >-
+        ID della config entry (solo utile con più di un veicolo
+        configurato). Se omesso viene aggiornato ogni veicolo.
+      required: false
+      selector:
+        text:
+
+acknowledge_all_alerts:
+  name: Conferma tutti gli alert
+  description: >-
+    Conferma tutti i codici alert dell'ultimo viaggio. Gli alert restano
+    visibili ma il sensore binario "Alert presenti" torna a OFF.
+  fields:
+    trip_id:
+      name: ID viaggio
+      description: >-
+        ID del viaggio su cui confermare tutti gli alert. Se omesso,
+        viene usato l'ultimo viaggio disponibile.
+      required: false
+      selector:
+        number:
+          min: 0
+          max: 100000000
+          mode: box
+    entry_id:
+      name: Entry ID
+      description: ID della config entry (opzionale).
+      required: false
+      selector:
+        text:
+
+unacknowledge_alert:
+  name: Ripristina alert
+  description: >-
+    Ripristina un alert precedentemente confermato: torna a essere
+    segnalato come attivo.
+  fields:
+    alert_code:
+      name: Codice alert
+      description: Codice numerico dell'alert da ripristinare.
+      required: true
+      selector:
+        number:
+          min: 0
+          max: 999
+          mode: box
+    trip_id:
+      name: ID viaggio
+      description: ID del viaggio (facoltativo, default = ultimo viaggio).
+      required: false
+      selector:
+        number:
+          min: 0
+          max: 100000000
+          mode: box
+    entry_id:
+      name: Entry ID
+      description: ID della config entry (facoltativo).
+      required: false
+      selector:
+        text:
+
+reset_alert_acknowledgments:
+  name: Reset conferme alert
+  description: >-
+    Cancella tutte le conferme alert memorizzate: gli alert tornano a
+    essere segnalati come attivi.
+  fields:
+    entry_id:
+      name: Entry ID
+      description: ID della config entry (opzionale).
+      required: false
+      selector:
+        text:

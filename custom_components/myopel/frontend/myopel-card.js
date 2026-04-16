@@ -2,12 +2,13 @@ import { LitElement, html, css, nothing } from "https://unpkg.com/lit?module";
 
 class MyOpelCard extends LitElement {
   static properties = {
-    _hass:        { state: true },
-    _config:      { state: true },
-    _tab:         { state: true },
-    _refuelView:  { state: true },
-    _view360Idx:  { state: true },
-    _use360:      { state: true },
+    _hass:         { state: true },
+    _config:       { state: true },
+    _tab:          { state: true },
+    _refuelView:   { state: true },
+    _view360Idx:   { state: true },
+    _use360:       { state: true },
+    _showAcked:    { state: true },
   };
 
   static styles = css`
@@ -285,9 +286,8 @@ class MyOpelCard extends LitElement {
     .op-alert-block {
       margin: 4px 0 2px; padding: 9px 12px;
       background: rgba(227,0,27,0.07); border: 1px solid rgba(227,0,27,0.22);
-      border-radius: 10px; cursor: pointer;
+      border-radius: 10px;
     }
-    .op-alert-block:hover { background: rgba(227,0,27,0.11); }
     .op-alert-block-header {
       display: flex; align-items: center; justify-content: space-between; margin-bottom: 4px;
     }
@@ -301,6 +301,47 @@ class MyOpelCard extends LitElement {
       border: 1px solid rgba(227,0,27,0.3); border-radius: 20px; padding: 1px 7px;
     }
     .op-alert-block-text { font-size: 12px; color: var(--op-text); line-height: 1.5; word-break: break-word; }
+
+    /* alert list with per-item ack button */
+    .op-alert-list { display: flex; flex-direction: column; gap: 6px; margin-top: 6px; }
+    .op-alert-item {
+      display: flex; align-items: center; gap: 8px;
+      background: rgba(227,0,27,0.08);
+      border: 1px solid rgba(227,0,27,0.22);
+      border-radius: 8px; padding: 7px 9px;
+      font-size: 12px;
+    }
+    .op-alert-item.acked {
+      background: rgba(255,255,255,0.025);
+      border-color: var(--op-border);
+      color: var(--op-muted);
+      text-decoration: line-through;
+      text-decoration-color: rgba(255,255,255,0.35);
+    }
+    .op-alert-item-label { flex: 1; line-height: 1.3; word-break: break-word; }
+    .op-alert-ack-btn {
+      font-size: 10px; font-weight: 700; letter-spacing: 0.5px;
+      text-transform: uppercase; padding: 3px 8px; border-radius: 6px;
+      border: 1px solid rgba(227,0,27,0.4);
+      background: rgba(227,0,27,0.15); color: var(--op-red);
+      cursor: pointer; user-select: none; white-space: nowrap;
+      transition: background 0.15s, border-color 0.15s;
+    }
+    .op-alert-ack-btn:hover { background: rgba(227,0,27,0.28); border-color: rgba(227,0,27,0.7); }
+    .op-alert-ack-btn.restore {
+      background: rgba(255,255,255,0.04); color: var(--op-muted);
+      border-color: var(--op-border);
+    }
+    .op-alert-ack-btn.restore:hover { color: var(--op-text); border-color: rgba(255,255,255,0.25); }
+    .op-alert-ack-all {
+      margin-top: 8px; text-align: right;
+    }
+    .op-acked-toggle {
+      margin-top: 8px; font-size: 11px; color: var(--op-muted);
+      cursor: pointer; user-select: none; text-align: center;
+      padding: 4px; border-top: 1px dashed var(--op-border);
+    }
+    .op-acked-toggle:hover { color: var(--op-text); }
 
     /* maintenance bars */
     .op-mbar {
@@ -385,6 +426,7 @@ class MyOpelCard extends LitElement {
     this._config = config;
     this._tab    = "trip";
     this._refuelView = false;
+    this._showAcked  = false;
     this._leafletMap = null;
     this._leafletMarker = null;
     this._view360Idx = 0;
@@ -608,13 +650,143 @@ class MyOpelCard extends LitElement {
       </div>`;
     }
     return html`
-      <div class="op-alert-block" @click=${() => this._open(codesSuffix)}>
+      <div class="op-alert-block" @click=${() => this._open(codesSuffix)} style="cursor:pointer;">
         <div class="op-alert-block-header">
           <span class="op-alert-block-label">⚠️ Alert attivi</span>
           ${count !== null ? html`<span class="op-alert-block-count">${count}</span>` : nothing}
         </div>
         <div class="op-alert-block-text">${codes}</div>
       </div>`;
+  }
+
+  // ── Alert acknowledgment helpers ─────────────────────────────────────────
+  _alertInfo() {
+    // Prefer the "unack" sensor (it carries full attributes including labels),
+    // fall back to the binary sensor for legacy layouts.
+    const prefix = this._prefix();
+    const unack = this._hass?.states[`sensor.${prefix}_ultimo_viaggio_alert_non_letti_codici`];
+    const bin   = this._hass?.states[`binary_sensor.${prefix}_ultimo_viaggio_alert_presenti`];
+    const src   = unack || bin;
+    if (!src) return null;
+    const a = src.attributes || {};
+    return {
+      tripId:   a.trip_id ?? null,
+      entryId:  a.entry_id ?? null,
+      all:      Array.isArray(a.all_codes) ? a.all_codes : [],
+      unack:    Array.isArray(a.unacknowledged_codes) ? a.unacknowledged_codes : [],
+      acked:    Array.isArray(a.acknowledged_codes) ? a.acknowledged_codes : [],
+      labels:   a.code_labels && typeof a.code_labels === "object" ? a.code_labels : {},
+    };
+  }
+
+  _alertLabel(info, code) {
+    return info.labels?.[String(code)] ?? `Codice ${code}`;
+  }
+
+  async _ackAlert(code) {
+    const info = this._alertInfo();
+    if (!info) return;
+    await this._hass.callService("myopel", "acknowledge_alert", {
+      alert_code: Number(code),
+      ...(info.tripId != null ? { trip_id: Number(info.tripId) } : {}),
+      ...(info.entryId ? { entry_id: info.entryId } : {}),
+    });
+  }
+
+  async _ackAllAlerts() {
+    const info = this._alertInfo();
+    if (!info || info.unack.length === 0) return;
+    await this._hass.callService("myopel", "acknowledge_all_alerts", {
+      ...(info.tripId != null ? { trip_id: Number(info.tripId) } : {}),
+      ...(info.entryId ? { entry_id: info.entryId } : {}),
+    });
+  }
+
+  async _resetAcks() {
+    const info = this._alertInfo();
+    await this._hass.callService("myopel", "reset_alert_acknowledgments", {
+      ...(info?.entryId ? { entry_id: info.entryId } : {}),
+    });
+  }
+
+  _renderAlertList() {
+    const info = this._alertInfo();
+    if (!info || info.all.length === 0) {
+      return html`<div class="op-row" style="padding:8px 6px;border-bottom:none;">
+        <div class="op-row-left">
+          <div class="op-row-ico">✅</div>
+          <div class="op-row-lbl">Alert</div>
+        </div>
+        <div class="op-row-val">Nessuno</div>
+      </div>`;
+    }
+
+    const unackItems = info.unack.map(code => html`
+      <div class="op-alert-item">
+        <span class="op-alert-item-label">⚠️ ${this._alertLabel(info, code)}</span>
+        <span class="op-alert-ack-btn"
+              title="Conferma — resta visibile ma non farà più scattare l'allarme"
+              @click=${(e) => { e.stopPropagation(); this._ackAlert(code); }}>
+          ✓ Conferma
+        </span>
+      </div>
+    `);
+
+    const ackedItems = (this._showAcked ? info.acked : []).map(code => html`
+      <div class="op-alert-item acked">
+        <span class="op-alert-item-label">${this._alertLabel(info, code)}</span>
+        <span class="op-alert-ack-btn restore"
+              title="Ripristina — torna a segnalarlo come attivo"
+              @click=${(e) => { e.stopPropagation(); this._unackAlert(code); }}>
+          ↺ Ripristina
+        </span>
+      </div>
+    `);
+
+    const headerCount = info.unack.length;
+    const hasAcked = info.acked.length > 0;
+
+    return html`
+      <div class="op-alert-block">
+        <div class="op-alert-block-header">
+          <span class="op-alert-block-label">
+            ${headerCount > 0 ? "⚠️ Alert attivi" : "✅ Tutti confermati"}
+          </span>
+          ${headerCount > 0
+            ? html`<span class="op-alert-block-count">${headerCount}</span>`
+            : nothing}
+        </div>
+        ${unackItems.length > 0 ? html`<div class="op-alert-list">${unackItems}</div>` : nothing}
+        ${unackItems.length > 1 ? html`
+          <div class="op-alert-ack-all">
+            <span class="op-alert-ack-btn"
+                  @click=${(e) => { e.stopPropagation(); this._ackAllAlerts(); }}>
+              ✓✓ Conferma tutti
+            </span>
+          </div>` : nothing}
+        ${hasAcked ? html`
+          <div class="op-acked-toggle"
+               @click=${(e) => { e.stopPropagation(); this._showAcked = !this._showAcked; }}>
+            ${this._showAcked
+              ? `▲ Nascondi ${info.acked.length} confermati`
+              : `▼ Mostra ${info.acked.length} alert confermati`}
+          </div>
+          ${this._showAcked
+            ? html`<div class="op-alert-list">${ackedItems}</div>`
+            : nothing}
+        ` : nothing}
+      </div>
+    `;
+  }
+
+  async _unackAlert(code) {
+    const info = this._alertInfo();
+    if (!info) return;
+    await this._hass.callService("myopel", "unacknowledge_alert", {
+      alert_code: Number(code),
+      ...(info.tripId != null ? { trip_id: Number(info.tripId) } : {}),
+      ...(info.entryId ? { entry_id: info.entryId } : {}),
+    });
   }
 
   // ── Render: Hero ──────────────────────────────────────────────────────────
@@ -711,11 +883,16 @@ class MyOpelCard extends LitElement {
           </div>
         </div>
 
-        ${hasAlert ? html`
-          <div class="op-alert" @click=${() => this._open("ultimo_viaggio_alert_attivi")}>
-            ⚠️ Alert attivo — codici: <strong>${this._state("ultimo_viaggio_alert_attivi") ?? ""}</strong>
-          </div>
-        ` : nothing}
+        ${(() => {
+          const info = this._alertInfo();
+          if (!info || info.unack.length === 0) return nothing;
+          const first = this._alertLabel(info, info.unack[0]);
+          const extra = info.unack.length > 1 ? ` +${info.unack.length - 1}` : "";
+          return html`
+            <div class="op-alert" @click=${() => { this._tab = "trip"; }}>
+              ⚠️ Alert attivo — <strong>${first}${extra}</strong>
+            </div>`;
+        })()}
       </div>
     `;
   }
@@ -885,7 +1062,6 @@ class MyOpelCard extends LitElement {
 
   // ── Tab: Viaggio ──────────────────────────────────────────────────────────
   _renderTrip() {
-    const alerts = this._state("ultimo_viaggio_alert_attivi");
     return html`<div class="op-body">
       <div class="op-section-label">Ultimo viaggio</div>
       <div class="op-grid">
@@ -899,7 +1075,7 @@ class MyOpelCard extends LitElement {
       ${this._row("⛽","Prezzo al litro",     this._fmt("prezzo_carburante")," €/L","prezzo_carburante")}
       ${this._row("🕐","Partenza",            this._fmtDate("ultimo_viaggio_inizio"),"","ultimo_viaggio_inizio")}
       ${this._row("🏁","Arrivo",              this._fmtDate("ultimo_viaggio_fine"),"","ultimo_viaggio_fine")}
-      ${this._row(alerts&&alerts!=="Nessuno"?"⚠️":"✅","Alert",alerts??"Nessuno","","ultimo_viaggio_alert_attivi")}
+      ${this._renderAlertList()}
     </div>`;
   }
 

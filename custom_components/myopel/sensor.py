@@ -152,6 +152,19 @@ SENSOR_DESCRIPTIONS: tuple[MyOpelSensorDescription, ...] = (
         name="Ultimo viaggio – Alert attivi",
         icon="mdi:alert-box-outline",
     ),
+    MyOpelSensorDescription(
+        key="last_trip_unack_alert_count",
+        data_key="last_trip_unack_alert_count",
+        name="Ultimo viaggio – Alert non letti",
+        state_class=SensorStateClass.MEASUREMENT,
+        icon="mdi:bell-alert-outline",
+    ),
+    MyOpelSensorDescription(
+        key="last_trip_unack_alert_codes",
+        data_key="last_trip_unack_alert_codes",
+        name="Ultimo viaggio – Alert non letti (codici)",
+        icon="mdi:bell-alert",
+    ),
     # ── Maintenance ──────────────────────────────────────────────────────────
     MyOpelSensorDescription(
         key="days_until_maintenance",
@@ -457,12 +470,32 @@ class MyOpelSensor(CoordinatorEntity[MyOpelCoordinator], SensorEntity):
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
-        """Expose full VIN so the Lovelace card can build image proxy URLs."""
-        return {"vin": self._vin}
+        """Expose VIN plus, on alert-related sensors, raw acked/unacked code lists."""
+        attrs: dict[str, Any] = {"vin": self._vin}
+        data = self.coordinator.data or {}
+        key = self.entity_description.data_key
+        if key in (
+            "last_trip_alert_codes",
+            "last_trip_alert_count",
+            "last_trip_unack_alert_codes",
+            "last_trip_unack_alert_count",
+        ):
+            attrs["trip_id"] = data.get("last_trip_id")
+            attrs["entry_id"] = self._entry.entry_id
+            attrs["all_codes"] = data.get("last_trip_alerts_raw") or []
+            attrs["unacknowledged_codes"] = data.get("last_trip_unack_alerts_raw") or []
+            attrs["acknowledged_codes"] = data.get("last_trip_acked_alerts_raw") or []
+            attrs["acknowledged_labels"] = data.get("last_trip_acked_alert_codes")
+            attrs["code_labels"] = data.get("last_trip_alert_labels") or {}
+        return attrs
 
 
 class MyOpelAlertActiveBinarySensor(CoordinatorEntity[MyOpelCoordinator], BinarySensorEntity):
-    """Binary sensor: ON if the last trip had any active alerts."""
+    """Binary sensor: ON when the last trip has unacknowledged alerts.
+
+    Acknowledged alerts remain visible via the `acknowledged_codes` attribute
+    (and the Lovelace card) but no longer trigger the "problem" state.
+    """
 
     _attr_has_entity_name = True
     _attr_name = "Ultimo viaggio – Alert presenti"
@@ -475,6 +508,8 @@ class MyOpelAlertActiveBinarySensor(CoordinatorEntity[MyOpelCoordinator], Binary
         entry_id: str,
     ) -> None:
         super().__init__(coordinator)
+        self._vin = vin
+        self._entry_id = entry_id
         self._attr_unique_id = f"{entry_id}_last_trip_has_alerts"
         self._attr_device_info = DeviceInfo(
             identifiers={(DOMAIN, vin)},
@@ -490,8 +525,30 @@ class MyOpelAlertActiveBinarySensor(CoordinatorEntity[MyOpelCoordinator], Binary
 
     @property
     def is_on(self) -> bool:
-        return bool(self.coordinator.data.get("last_trip_has_alerts", False))
+        return bool(self.coordinator.data.get("last_trip_has_unack_alerts", False))
 
     @property
     def icon(self) -> str:
-        return "mdi:alert-circle" if self.is_on else "mdi:alert-circle-outline"
+        if self.is_on:
+            return "mdi:alert-circle"
+        # Off but we still have acked alerts → muted icon so the user sees
+        # there's history to review.
+        if self.coordinator.data.get("last_trip_has_alerts"):
+            return "mdi:alert-circle-check-outline"
+        return "mdi:alert-circle-outline"
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        data = self.coordinator.data or {}
+        return {
+            "vin": self._vin,
+            "entry_id": self._entry_id,
+            "trip_id": data.get("last_trip_id"),
+            "all_codes": data.get("last_trip_alerts_raw") or [],
+            "unacknowledged_codes": data.get("last_trip_unack_alerts_raw") or [],
+            "acknowledged_codes": data.get("last_trip_acked_alerts_raw") or [],
+            "has_any_alerts": bool(data.get("last_trip_has_alerts")),
+            "acknowledged_labels": data.get("last_trip_acked_alert_codes"),
+            "unacknowledged_labels": data.get("last_trip_unack_alert_codes"),
+            "code_labels": data.get("last_trip_alert_labels") or {},
+        }

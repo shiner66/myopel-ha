@@ -4,6 +4,38 @@ Tutte le modifiche rilevanti a questa integrazione sono documentate qui.
 
 ---
 
+## [Unreleased]
+
+### Aggiunte
+- **Acknowledgment degli alert**: ora è possibile "confermare" gli alert segnalati
+  dall'ultimo viaggio. Un alert confermato non fa più scattare il binary sensor
+  *"Alert presenti"* ma resta visibile nella card (sezione comprimibile
+  *"Mostra N alert confermati"*).
+  - Nuovi servizi: `myopel.acknowledge_alert`, `myopel.acknowledge_all_alerts`,
+    `myopel.unacknowledge_alert`, `myopel.reset_alert_acknowledgments`.
+  - Nuovi sensori: *"Ultimo viaggio – Alert non letti"* (numero) e
+    *"Ultimo viaggio – Alert non letti (codici)"* (etichette).
+  - Nuovi attributi sugli entity relativi agli alert: `all_codes`,
+    `acknowledged_codes`, `unacknowledged_codes`, `code_labels`, `trip_id`,
+    `entry_id`.
+  - Persistenza tramite `homeassistant.helpers.storage.Store` (sopravvive ai
+    riavvii). L'acknowledgment è legato alla coppia `(trip_id, code)`:
+    se lo stesso codice ricompare in un nuovo viaggio torna a essere segnalato.
+- **Card Lovelace**: ogni alert attivo ha ora un pulsante "✓ Conferma";
+  se più alert sono attivi compare "✓✓ Conferma tutti". Gli alert confermati
+  si possono ri-espandere e ripristinare con "↺ Ripristina".
+
+### Modifiche
+- Il binary sensor *"Ultimo viaggio – Alert presenti"* ora riflette gli alert
+  **non confermati** (prima rifletteva tutti). L'attributo `has_any_alerts`
+  resta `True` finché esistono alert (anche confermati) così da poter
+  ricostruire il comportamento precedente nelle automazioni.
+- `INTEGRATION_VERSION` ora viene letto da `manifest.json` invece di essere
+  hard-coded: l'URL della card Lovelace resta sempre allineato alla versione
+  effettiva dell'integrazione.
+
+---
+
 ## [1.3.0] – 2026-03-25
 
 ### Aggiunte

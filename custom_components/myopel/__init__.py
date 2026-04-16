@@ -9,16 +9,23 @@ from collections import Counter, defaultdict
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+import voluptuous as vol
+
 from homeassistant.components.frontend import add_extra_js_url
 from homeassistant.components.http import StaticPathConfig
 from homeassistant.components.persistent_notification import async_create as pn_create
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.core import HomeAssistant, callback
+from homeassistant.core import HomeAssistant, ServiceCall, callback
 from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
+from .ack_store import AlertAckStore
 from .alerts import ALERT_CODES
-from .const import CONF_FILE_PATH, CONF_SCAN_INTERVAL, DEFAULT_SCAN_INTERVAL, DOMAIN
+from .const import (
+    ATTR_ALERT_CODE, ATTR_ENTRY_ID, ATTR_TRIP_ID,
+    CONF_FILE_PATH, CONF_SCAN_INTERVAL, DEFAULT_SCAN_INTERVAL, DOMAIN,
+    SERVICE_ACK_ALERT, SERVICE_ACK_ALL_ALERTS, SERVICE_RESET_ACKS, SERVICE_UNACK_ALERT,
+)
 from .const import (
     CONF_IMAP_SERVER, CONF_IMAP_PORT, CONF_IMAP_USERNAME, CONF_IMAP_PASSWORD,
     CONF_IMAP_FOLDER, CONF_IMAP_SENDER, CONF_IMAP_INTERVAL, CONF_IMAP_DISABLED,
@@ -32,7 +39,19 @@ _LOGGER = logging.getLogger(__name__)
 CONFIG_SCHEMA = cv.config_entry_only_config_schema(DOMAIN)
 
 PLATFORMS = ["sensor"]
-INTEGRATION_VERSION = "1.3.2"
+
+
+def _read_manifest_version() -> str:
+    """Read the integration version from manifest.json (single source of truth)."""
+    manifest_path = Path(__file__).with_name("manifest.json")
+    try:
+        with manifest_path.open("r", encoding="utf-8") as fh:
+            return json.load(fh).get("version", "0.0.0")
+    except (OSError, json.JSONDecodeError):
+        return "0.0.0"
+
+
+INTEGRATION_VERSION = _read_manifest_version()
 
 
 def _alert_label(code: int) -> str:
@@ -122,7 +141,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     min_dist_enabled = entry.options.get(CONF_MIN_TRIP_DISTANCE_ENABLED, False)
     min_dist = entry.options.get(CONF_MIN_TRIP_DISTANCE, DEFAULT_MIN_TRIP_DISTANCE) if min_dist_enabled else 0.0
 
-    coordinator = MyOpelCoordinator(hass, file_path, scan_interval, min_dist)
+    ack_store = AlertAckStore(hass, entry.entry_id)
+    await ack_store.async_load()
+
+    coordinator = MyOpelCoordinator(hass, file_path, scan_interval, min_dist, ack_store=ack_store)
 
     # ── Watchdog observer ────────────────────────────────────────────────────
     observer = None
@@ -188,6 +210,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         "coordinator": coordinator,
         "imap_fetcher": imap_fetcher,
         "observer": observer,
+        "ack_store": ack_store,
     }
 
     # If the entry was created before we had a real VIN (folder was empty),
@@ -195,9 +218,115 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     if entry.unique_id is None or "unknown" in entry.title.lower():
         _register_vin_updater(hass, entry, coordinator)
 
+    _async_register_services(hass)
+
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     entry.async_on_unload(entry.add_update_listener(async_reload_entry))
     return True
+
+
+# ── Services ─────────────────────────────────────────────────────────────────
+
+_ACK_SERVICE_SCHEMA = vol.Schema({
+    vol.Required(ATTR_ALERT_CODE): vol.All(vol.Coerce(int), vol.Range(min=0, max=999)),
+    vol.Optional(ATTR_TRIP_ID): vol.Any(None, vol.Coerce(int)),
+    vol.Optional(ATTR_ENTRY_ID): cv.string,
+})
+
+_ACK_ALL_SERVICE_SCHEMA = vol.Schema({
+    vol.Optional(ATTR_ENTRY_ID): cv.string,
+    vol.Optional(ATTR_TRIP_ID): vol.Any(None, vol.Coerce(int)),
+})
+
+_RESET_SERVICE_SCHEMA = vol.Schema({
+    vol.Optional(ATTR_ENTRY_ID): cv.string,
+})
+
+
+def _iter_entries(hass: HomeAssistant, entry_id: str | None):
+    """Yield the (entry_id, entry_data) pairs targeted by a service call."""
+    all_entries: dict = hass.data.get(DOMAIN, {})
+    if entry_id:
+        if entry_id in all_entries:
+            yield entry_id, all_entries[entry_id]
+        return
+    yield from all_entries.items()
+
+
+def _async_register_services(hass: HomeAssistant) -> None:
+    """Register MyOpel services idempotently."""
+    if hass.services.has_service(DOMAIN, SERVICE_ACK_ALERT):
+        return
+
+    async def _handle_ack(call: ServiceCall) -> None:
+        code = int(call.data[ATTR_ALERT_CODE])
+        trip_id = call.data.get(ATTR_TRIP_ID)
+        entry_id = call.data.get(ATTR_ENTRY_ID)
+        for eid, ed in _iter_entries(hass, entry_id):
+            ack_store: AlertAckStore | None = ed.get("ack_store")
+            coordinator: MyOpelCoordinator | None = ed.get("coordinator")
+            if ack_store is None:
+                continue
+            tid = trip_id if trip_id is not None else (
+                coordinator.data.get("last_trip_id") if coordinator and coordinator.data else None
+            )
+            added = await ack_store.async_ack(tid, code)
+            if added and coordinator is not None:
+                await coordinator.async_request_refresh()
+            _LOGGER.debug("%s: ack code=%s trip=%s entry=%s (new=%s)",
+                          DOMAIN, code, tid, eid, added)
+
+    async def _handle_ack_all(call: ServiceCall) -> None:
+        entry_id = call.data.get(ATTR_ENTRY_ID)
+        trip_id_override = call.data.get(ATTR_TRIP_ID)
+        for eid, ed in _iter_entries(hass, entry_id):
+            ack_store: AlertAckStore | None = ed.get("ack_store")
+            coordinator: MyOpelCoordinator | None = ed.get("coordinator")
+            if ack_store is None or coordinator is None or not coordinator.data:
+                continue
+            tid = trip_id_override if trip_id_override is not None else coordinator.data.get("last_trip_id")
+            codes = coordinator.data.get("last_trip_alerts_raw") or []
+            if not codes:
+                continue
+            added = await ack_store.async_ack_many(tid, codes)
+            if added:
+                await coordinator.async_request_refresh()
+            _LOGGER.debug("%s: ack_all trip=%s entry=%s added=%d", DOMAIN, tid, eid, added)
+
+    async def _handle_reset(call: ServiceCall) -> None:
+        entry_id = call.data.get(ATTR_ENTRY_ID)
+        for eid, ed in _iter_entries(hass, entry_id):
+            ack_store: AlertAckStore | None = ed.get("ack_store")
+            coordinator: MyOpelCoordinator | None = ed.get("coordinator")
+            if ack_store is None:
+                continue
+            await ack_store.async_reset()
+            if coordinator is not None:
+                await coordinator.async_request_refresh()
+            _LOGGER.debug("%s: reset ack per entry=%s", DOMAIN, eid)
+
+    async def _handle_unack(call: ServiceCall) -> None:
+        code = int(call.data[ATTR_ALERT_CODE])
+        trip_id = call.data.get(ATTR_TRIP_ID)
+        entry_id = call.data.get(ATTR_ENTRY_ID)
+        for eid, ed in _iter_entries(hass, entry_id):
+            ack_store: AlertAckStore | None = ed.get("ack_store")
+            coordinator: MyOpelCoordinator | None = ed.get("coordinator")
+            if ack_store is None:
+                continue
+            tid = trip_id if trip_id is not None else (
+                coordinator.data.get("last_trip_id") if coordinator and coordinator.data else None
+            )
+            removed = await ack_store.async_unack(tid, code)
+            if removed and coordinator is not None:
+                await coordinator.async_request_refresh()
+            _LOGGER.debug("%s: unack code=%s trip=%s entry=%s (removed=%s)",
+                          DOMAIN, code, tid, eid, removed)
+
+    hass.services.async_register(DOMAIN, SERVICE_ACK_ALERT, _handle_ack, schema=_ACK_SERVICE_SCHEMA)
+    hass.services.async_register(DOMAIN, SERVICE_ACK_ALL_ALERTS, _handle_ack_all, schema=_ACK_ALL_SERVICE_SCHEMA)
+    hass.services.async_register(DOMAIN, SERVICE_UNACK_ALERT, _handle_unack, schema=_ACK_SERVICE_SCHEMA)
+    hass.services.async_register(DOMAIN, SERVICE_RESET_ACKS, _handle_reset, schema=_RESET_SERVICE_SCHEMA)
 
 
 def _register_vin_updater(hass: HomeAssistant, entry: ConfigEntry, coordinator) -> None:
@@ -250,7 +379,14 @@ async def async_reload_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
 class MyOpelCoordinator(DataUpdateCoordinator):
     """Coordinator that reads the .myop / trips.json file and extracts latest vehicle data."""
 
-    def __init__(self, hass: HomeAssistant, file_path: str, scan_interval: int, min_trip_distance: float = 0.0) -> None:
+    def __init__(
+        self,
+        hass: HomeAssistant,
+        file_path: str,
+        scan_interval: int,
+        min_trip_distance: float = 0.0,
+        ack_store: AlertAckStore | None = None,
+    ) -> None:
         super().__init__(
             hass,
             _LOGGER,
@@ -259,6 +395,7 @@ class MyOpelCoordinator(DataUpdateCoordinator):
         )
         self.file_path = file_path
         self.min_trip_distance = min_trip_distance
+        self.ack_store = ack_store
 
     async def _async_update_data(self) -> dict:
         """Read and parse the trip data file."""
@@ -360,13 +497,36 @@ class MyOpelCoordinator(DataUpdateCoordinator):
         ), 2) or None
 
         # ── Alerts ───────────────────────────────────────────────────────────
-        last_trip_alerts: list[int] = latest.get("alerts") or []
+        last_trip_alerts: list[int] = [int(c) for c in (latest.get("alerts") or []) if isinstance(c, int)]
+        last_trip_id = latest.get("id")
         last_trip_alert_count = len(last_trip_alerts)
         last_trip_has_alerts = bool(last_trip_alerts)
         last_trip_alert_codes = (
             ", ".join(_alert_label(c) for c in sorted(set(last_trip_alerts)))
             if last_trip_alerts else "Nessuno"
         )
+
+        # Split alerts into acknowledged / unacknowledged via the ack store.
+        acked_codes_for_trip = (
+            set(self.ack_store.acked_codes_for(last_trip_id))
+            if self.ack_store is not None else set()
+        )
+        unique_alert_codes = sorted(set(last_trip_alerts))
+        last_trip_acked_alerts = sorted(c for c in unique_alert_codes if c in acked_codes_for_trip)
+        last_trip_unack_alerts = sorted(c for c in unique_alert_codes if c not in acked_codes_for_trip)
+        last_trip_unack_alert_count = sum(
+            1 for c in last_trip_alerts if c not in acked_codes_for_trip
+        )
+        last_trip_has_unack_alerts = bool(last_trip_unack_alerts)
+        last_trip_unack_alert_codes = (
+            ", ".join(_alert_label(c) for c in last_trip_unack_alerts)
+            if last_trip_unack_alerts else "Nessuno"
+        )
+        last_trip_acked_alert_codes = (
+            ", ".join(_alert_label(c) for c in last_trip_acked_alerts)
+            if last_trip_acked_alerts else "Nessuno"
+        )
+        last_trip_alert_labels = {str(c): _alert_label(c) for c in unique_alert_codes}
 
         # All-time alert frequency across filtered trips
         all_alert_codes: list[int] = []
@@ -489,6 +649,14 @@ class MyOpelCoordinator(DataUpdateCoordinator):
             "last_trip_alert_count": last_trip_alert_count,
             "last_trip_alert_codes": last_trip_alert_codes,
             "last_trip_has_alerts": last_trip_has_alerts,
+            "last_trip_alerts_raw": unique_alert_codes,
+            "last_trip_unack_alerts_raw": last_trip_unack_alerts,
+            "last_trip_acked_alerts_raw": last_trip_acked_alerts,
+            "last_trip_unack_alert_count": last_trip_unack_alert_count,
+            "last_trip_unack_alert_codes": last_trip_unack_alert_codes,
+            "last_trip_acked_alert_codes": last_trip_acked_alert_codes,
+            "last_trip_has_unack_alerts": last_trip_has_unack_alerts,
+            "last_trip_alert_labels": last_trip_alert_labels,
             # --- Vehicle state (from latest trip end) ---
             "mileage_km": end_info.get("mileage"),
             "fuel_level_pct": latest.get("fuelLevel"),

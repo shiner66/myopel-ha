@@ -55,5 +55,79 @@
         }
       }
     }
+  },
+  "services": {
+    "acknowledge_alert": {
+      "name": "Acknowledge alert",
+      "description": "Acknowledge a single alert code in the chosen scope: it stays visible but no longer trips the binary sensor.",
+      "fields": {
+        "alert_code": {
+          "name": "Alert code",
+          "description": "Numeric alert code to acknowledge."
+        },
+        "scope": {
+          "name": "Scope",
+          "description": "Scope to apply the ack to: last_trip, today, month, total."
+        },
+        "trip_id": {
+          "name": "Trip ID",
+          "description": "Force the ack on a specific trip (overrides `scope`)."
+        },
+        "entry_id": {
+          "name": "Entry ID",
+          "description": "Config entry ID (useful with multiple vehicles)."
+        }
+      }
+    },
+    "acknowledge_all_alerts": {
+      "name": "Acknowledge all alerts",
+      "description": "Acknowledge all alerts within the chosen scope.",
+      "fields": {
+        "scope": {
+          "name": "Scope",
+          "description": "Scope: last_trip, today, month or total."
+        },
+        "trip_id": {
+          "name": "Trip ID",
+          "description": "Force the ack on a specific trip (overrides `scope`)."
+        },
+        "entry_id": {
+          "name": "Entry ID",
+          "description": "Config entry ID (optional)."
+        }
+      }
+    },
+    "unacknowledge_alert": {
+      "name": "Restore alert",
+      "description": "Un-acknowledge an alert: it becomes active again.",
+      "fields": {
+        "alert_code": {
+          "name": "Alert code",
+          "description": "Numeric code of the alert to restore."
+        },
+        "scope": {
+          "name": "Scope",
+          "description": "Scope: last_trip, today, month or total."
+        },
+        "trip_id": {
+          "name": "Trip ID",
+          "description": "Force the restore on a specific trip (overrides `scope`)."
+        },
+        "entry_id": {
+          "name": "Entry ID",
+          "description": "Config entry ID (optional)."
+        }
+      }
+    },
+    "reset_alert_acknowledgments": {
+      "name": "Reset alert acknowledgments",
+      "description": "Clears all stored acknowledgments.",
+      "fields": {
+        "entry_id": {
+          "name": "Entry ID",
+          "description": "Config entry ID (optional)."
+        }
+      }
+    }
   }
 }

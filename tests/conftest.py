@@ -141,6 +141,22 @@ class NumberSelector:
 
 # ── Other stubs ───────────────────────────────────────────────────────────────
 
+class Store:
+    """In-memory stand-in for homeassistant.helpers.storage.Store."""
+
+    def __init__(self, hass: Any, version: int, key: str) -> None:
+        self._hass = hass
+        self._version = version
+        self._key = key
+        self._data: Any = None
+
+    async def async_load(self) -> Any:
+        return self._data
+
+    async def async_save(self, data: Any) -> None:
+        self._data = data
+
+
 class StaticPathConfig:
     pass
 
@@ -203,6 +219,7 @@ _STUBS: dict[str, Any] = {
         "NumberSelectorConfig": NumberSelectorConfig,
         "NumberSelectorMode": NumberSelectorMode,
     }),
+    "homeassistant.helpers.storage": _make({"Store": Store}),
     "homeassistant.helpers.update_coordinator": _make({
         "CoordinatorEntity": CoordinatorEntity,
         "DataUpdateCoordinator": DataUpdateCoordinator,

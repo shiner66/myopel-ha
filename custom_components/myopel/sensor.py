@@ -152,6 +152,19 @@ SENSOR_DESCRIPTIONS: tuple[MyOpelSensorDescription, ...] = (
         name="Ultimo viaggio – Alert attivi",
         icon="mdi:alert-box-outline",
     ),
+    MyOpelSensorDescription(
+        key="last_trip_unack_alert_count",
+        data_key="last_trip_unack_alert_count",
+        name="Ultimo viaggio – Alert non letti",
+        state_class=SensorStateClass.MEASUREMENT,
+        icon="mdi:bell-alert-outline",
+    ),
+    MyOpelSensorDescription(
+        key="last_trip_unack_alert_codes",
+        data_key="last_trip_unack_alert_codes",
+        name="Ultimo viaggio – Alert non letti (codici)",
+        icon="mdi:bell-alert",
+    ),
     # ── Maintenance ──────────────────────────────────────────────────────────
     MyOpelSensorDescription(
         key="days_until_maintenance",
@@ -312,6 +325,91 @@ SENSOR_DESCRIPTIONS: tuple[MyOpelSensorDescription, ...] = (
         name="Mese corrente – Codici alert",
         icon="mdi:alert-box-outline",
     ),
+    MyOpelSensorDescription(
+        key="month_unack_alert_count",
+        data_key="month_unack_alert_count",
+        name="Mese corrente – Alert non letti",
+        state_class=SensorStateClass.MEASUREMENT,
+        icon="mdi:bell-alert-outline",
+    ),
+    # ── Today aggregates (oggi) ─────────────────────────────────────────────
+    MyOpelSensorDescription(
+        key="today_trip_count",
+        data_key="today_trip_count",
+        name="Oggi – Viaggi",
+        state_class=SensorStateClass.MEASUREMENT,
+        icon="mdi:calendar-today",
+    ),
+    MyOpelSensorDescription(
+        key="today_distance_km",
+        data_key="today_distance_km",
+        name="Oggi – Distanza",
+        native_unit_of_measurement=UnitOfLength.KILOMETERS,
+        device_class=SensorDeviceClass.DISTANCE,
+        state_class=SensorStateClass.MEASUREMENT,
+        icon="mdi:map-marker-distance",
+    ),
+    MyOpelSensorDescription(
+        key="today_duration_min",
+        data_key="today_duration_min",
+        name="Oggi – Durata guida",
+        native_unit_of_measurement=UnitOfTime.MINUTES,
+        state_class=SensorStateClass.MEASUREMENT,
+        icon="mdi:timer-outline",
+    ),
+    MyOpelSensorDescription(
+        key="today_fuel_l",
+        data_key="today_fuel_l",
+        name="Oggi – Carburante totale",
+        native_unit_of_measurement=UnitOfVolume.LITERS,
+        device_class=SensorDeviceClass.VOLUME,
+        state_class=SensorStateClass.MEASUREMENT,
+        icon="mdi:fuel",
+    ),
+    MyOpelSensorDescription(
+        key="today_fuel_kmpl",
+        data_key="today_fuel_kmpl",
+        name="Oggi – Consumo medio",
+        native_unit_of_measurement="km/L",
+        state_class=SensorStateClass.MEASUREMENT,
+        icon="mdi:chart-line",
+    ),
+    MyOpelSensorDescription(
+        key="today_avg_speed",
+        data_key="today_avg_speed",
+        name="Oggi – Velocità media",
+        native_unit_of_measurement="km/h",
+        state_class=SensorStateClass.MEASUREMENT,
+        icon="mdi:speedometer",
+    ),
+    MyOpelSensorDescription(
+        key="today_cost_eur",
+        data_key="today_cost_eur",
+        name="Oggi – Costo stimato",
+        native_unit_of_measurement="€",
+        state_class=SensorStateClass.MEASUREMENT,
+        icon="mdi:cash",
+    ),
+    MyOpelSensorDescription(
+        key="today_alert_count",
+        data_key="today_alert_count",
+        name="Oggi – Alert",
+        state_class=SensorStateClass.MEASUREMENT,
+        icon="mdi:alert-circle-outline",
+    ),
+    MyOpelSensorDescription(
+        key="today_alert_codes_summary",
+        data_key="today_alert_codes_summary",
+        name="Oggi – Codici alert",
+        icon="mdi:alert-box-outline",
+    ),
+    MyOpelSensorDescription(
+        key="today_unack_alert_count",
+        data_key="today_unack_alert_count",
+        name="Oggi – Alert non letti",
+        state_class=SensorStateClass.MEASUREMENT,
+        icon="mdi:bell-alert-outline",
+    ),
     # ── Dall'ultimo rifornimento ─────────────────────────────────────────────
     MyOpelSensorDescription(
         key="refuel_trip_count",
@@ -455,14 +553,55 @@ class MyOpelSensor(CoordinatorEntity[MyOpelCoordinator], SensorEntity):
 
         return value
 
+    _ALERT_ATTR_SCOPE: dict[str, str] = {
+        "last_trip_alert_codes": "last_trip",
+        "last_trip_alert_count": "last_trip",
+        "last_trip_unack_alert_codes": "last_trip",
+        "last_trip_unack_alert_count": "last_trip",
+        "month_alert_count": "month",
+        "month_alert_codes_summary": "month",
+        "month_unack_alert_count": "month",
+        "total_alert_count": "total",
+        "all_alert_codes_summary": "total",
+        "today_alert_count": "today",
+        "today_alert_codes_summary": "today",
+        "today_unack_alert_count": "today",
+    }
+
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
-        """Expose full VIN so the Lovelace card can build image proxy URLs."""
-        return {"vin": self._vin}
+        """Expose VIN plus, on alert-related sensors, raw acked/unacked code lists."""
+        attrs: dict[str, Any] = {"vin": self._vin}
+        data = self.coordinator.data or {}
+        key = self.entity_description.data_key
+        scope = self._ALERT_ATTR_SCOPE.get(key)
+        if scope is None:
+            return attrs
+        attrs["entry_id"] = self._entry.entry_id
+        attrs["scope"] = scope
+        if scope == "last_trip":
+            attrs["trip_id"] = data.get("last_trip_id")
+            attrs["all_codes"] = data.get("last_trip_alerts_raw") or []
+            attrs["unacknowledged_codes"] = data.get("last_trip_unack_alerts_raw") or []
+            attrs["acknowledged_codes"] = data.get("last_trip_acked_alerts_raw") or []
+            attrs["acknowledged_labels"] = data.get("last_trip_acked_alert_codes")
+            attrs["code_labels"] = data.get("last_trip_alert_labels") or {}
+        else:
+            attrs["all_codes"] = data.get(f"{scope}_alerts_raw") or []
+            attrs["unacknowledged_codes"] = data.get(f"{scope}_unack_alerts_raw") or []
+            attrs["acknowledged_codes"] = data.get(f"{scope}_acked_alerts_raw") or []
+            attrs["acknowledged_labels"] = data.get(f"{scope}_acked_alert_codes")
+            attrs["code_labels"] = data.get(f"{scope}_alert_labels") or {}
+            attrs["code_to_trips"] = data.get(f"{scope}_code_to_trips") or {}
+        return attrs
 
 
 class MyOpelAlertActiveBinarySensor(CoordinatorEntity[MyOpelCoordinator], BinarySensorEntity):
-    """Binary sensor: ON if the last trip had any active alerts."""
+    """Binary sensor: ON when the last trip has unacknowledged alerts.
+
+    Acknowledged alerts remain visible via the `acknowledged_codes` attribute
+    (and the Lovelace card) but no longer trigger the "problem" state.
+    """
 
     _attr_has_entity_name = True
     _attr_name = "Ultimo viaggio – Alert presenti"
@@ -475,6 +614,8 @@ class MyOpelAlertActiveBinarySensor(CoordinatorEntity[MyOpelCoordinator], Binary
         entry_id: str,
     ) -> None:
         super().__init__(coordinator)
+        self._vin = vin
+        self._entry_id = entry_id
         self._attr_unique_id = f"{entry_id}_last_trip_has_alerts"
         self._attr_device_info = DeviceInfo(
             identifiers={(DOMAIN, vin)},
@@ -490,8 +631,30 @@ class MyOpelAlertActiveBinarySensor(CoordinatorEntity[MyOpelCoordinator], Binary
 
     @property
     def is_on(self) -> bool:
-        return bool(self.coordinator.data.get("last_trip_has_alerts", False))
+        return bool(self.coordinator.data.get("last_trip_has_unack_alerts", False))
 
     @property
     def icon(self) -> str:
-        return "mdi:alert-circle" if self.is_on else "mdi:alert-circle-outline"
+        if self.is_on:
+            return "mdi:alert-circle"
+        # Off but we still have acked alerts → muted icon so the user sees
+        # there's history to review.
+        if self.coordinator.data.get("last_trip_has_alerts"):
+            return "mdi:alert-circle-check-outline"
+        return "mdi:alert-circle-outline"
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        data = self.coordinator.data or {}
+        return {
+            "vin": self._vin,
+            "entry_id": self._entry_id,
+            "trip_id": data.get("last_trip_id"),
+            "all_codes": data.get("last_trip_alerts_raw") or [],
+            "unacknowledged_codes": data.get("last_trip_unack_alerts_raw") or [],
+            "acknowledged_codes": data.get("last_trip_acked_alerts_raw") or [],
+            "has_any_alerts": bool(data.get("last_trip_has_alerts")),
+            "acknowledged_labels": data.get("last_trip_acked_alert_codes"),
+            "unacknowledged_labels": data.get("last_trip_unack_alert_codes"),
+            "code_labels": data.get("last_trip_alert_labels") or {},
+        }

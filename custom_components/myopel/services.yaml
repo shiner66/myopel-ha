@@ -1,0 +1,142 @@
+acknowledge_alert:
+  name: Conferma alert
+  description: >-
+    Conferma (acknowledge) un singolo codice alert. L'alert resta visibile
+    nella card ma non farà più scattare il sensore binario "Alert presenti".
+  fields:
+    alert_code:
+      name: Codice alert
+      description: Codice numerico dell'alert da confermare (es. 52 per pressione pneumatici).
+      required: true
+      selector:
+        number:
+          min: 0
+          max: 999
+          mode: box
+    scope:
+      name: Ambito
+      description: >-
+        Ambito a cui applicare l'ack: "last_trip" (solo ultimo viaggio),
+        "today" (tutti i viaggi di oggi), "month" (mese corrente), "total"
+        (tutto lo storico). Default: last_trip.
+      required: false
+      default: last_trip
+      selector:
+        select:
+          options:
+            - last_trip
+            - today
+            - month
+            - total
+    trip_id:
+      name: ID viaggio
+      description: >-
+        Forza l'ack su uno specifico viaggio, ignorando `scope`.
+      required: false
+      selector:
+        number:
+          min: 0
+          max: 100000000
+          mode: box
+    entry_id:
+      name: Entry ID
+      description: >-
+        ID della config entry (solo utile con più di un veicolo
+        configurato). Se omesso viene aggiornato ogni veicolo.
+      required: false
+      selector:
+        text:
+
+acknowledge_all_alerts:
+  name: Conferma tutti gli alert
+  description: >-
+    Conferma tutti i codici alert nell'ambito indicato. Gli alert restano
+    visibili ma il sensore binario "Alert presenti" torna a OFF.
+  fields:
+    scope:
+      name: Ambito
+      description: >-
+        Ambito: "last_trip" (default), "today", "month" o "total".
+      required: false
+      default: last_trip
+      selector:
+        select:
+          options:
+            - last_trip
+            - today
+            - month
+            - total
+    trip_id:
+      name: ID viaggio
+      description: >-
+        Forza l'ack su uno specifico viaggio (ignora `scope`).
+      required: false
+      selector:
+        number:
+          min: 0
+          max: 100000000
+          mode: box
+    entry_id:
+      name: Entry ID
+      description: ID della config entry (opzionale).
+      required: false
+      selector:
+        text:
+
+unacknowledge_alert:
+  name: Ripristina alert
+  description: >-
+    Ripristina un alert precedentemente confermato: torna a essere
+    segnalato come attivo.
+  fields:
+    alert_code:
+      name: Codice alert
+      description: Codice numerico dell'alert da ripristinare.
+      required: true
+      selector:
+        number:
+          min: 0
+          max: 999
+          mode: box
+    scope:
+      name: Ambito
+      description: >-
+        Ambito: "last_trip" (default), "today", "month" o "total".
+      required: false
+      default: last_trip
+      selector:
+        select:
+          options:
+            - last_trip
+            - today
+            - month
+            - total
+    trip_id:
+      name: ID viaggio
+      description: >-
+        Forza il ripristino su uno specifico viaggio (ignora `scope`).
+      required: false
+      selector:
+        number:
+          min: 0
+          max: 100000000
+          mode: box
+    entry_id:
+      name: Entry ID
+      description: ID della config entry (facoltativo).
+      required: false
+      selector:
+        text:
+
+reset_alert_acknowledgments:
+  name: Reset conferme alert
+  description: >-
+    Cancella tutte le conferme alert memorizzate: gli alert tornano a
+    essere segnalati come attivi.
+  fields:
+    entry_id:
+      name: Entry ID
+      description: ID della config entry (opzionale).
+      required: false
+      selector:
+        text:

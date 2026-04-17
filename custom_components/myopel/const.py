@@ -35,3 +35,25 @@ DEFAULT_MIN_TRIP_DISTANCE = 1.0  # km
 # (CEST) during summer if the displayed times are 1 hour ahead.
 CONF_TIME_OFFSET = "time_offset"
 DEFAULT_TIME_OFFSET = 1
+
+# Alert acknowledgment storage
+ACK_STORAGE_VERSION = 1
+ACK_STORAGE_KEY_TPL = f"{DOMAIN}.{{entry_id}}.acks"
+
+# Services
+SERVICE_ACK_ALERT = "acknowledge_alert"
+SERVICE_ACK_ALL_ALERTS = "acknowledge_all_alerts"
+SERVICE_UNACK_ALERT = "unacknowledge_alert"
+SERVICE_RESET_ACKS = "reset_alert_acknowledgments"
+
+ATTR_ALERT_CODE = "alert_code"
+ATTR_TRIP_ID = "trip_id"
+ATTR_ENTRY_ID = "entry_id"
+ATTR_SCOPE = "scope"
+
+# Alert scopes (used by services to target an aggregation window)
+SCOPE_LAST_TRIP = "last_trip"
+SCOPE_TODAY = "today"
+SCOPE_MONTH = "month"
+SCOPE_TOTAL = "total"
+SCOPES = (SCOPE_LAST_TRIP, SCOPE_TODAY, SCOPE_MONTH, SCOPE_TOTAL)

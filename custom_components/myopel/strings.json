@@ -55,5 +55,79 @@
         }
       }
     }
+  },
+  "services": {
+    "acknowledge_alert": {
+      "name": "Conferma alert",
+      "description": "Conferma un singolo codice alert nell'ambito scelto: resta visibile ma non fa più scattare il sensore.",
+      "fields": {
+        "alert_code": {
+          "name": "Codice alert",
+          "description": "Codice numerico dell'alert da confermare."
+        },
+        "scope": {
+          "name": "Ambito",
+          "description": "Ambito su cui applicare l'ack: last_trip, today, month, total."
+        },
+        "trip_id": {
+          "name": "ID viaggio",
+          "description": "Forza l'ack su uno specifico viaggio (ignora `scope`)."
+        },
+        "entry_id": {
+          "name": "Entry ID",
+          "description": "ID della config entry (solo se hai più veicoli)."
+        }
+      }
+    },
+    "acknowledge_all_alerts": {
+      "name": "Conferma tutti gli alert",
+      "description": "Conferma tutti gli alert nell'ambito scelto.",
+      "fields": {
+        "scope": {
+          "name": "Ambito",
+          "description": "Ambito: last_trip, today, month o total."
+        },
+        "trip_id": {
+          "name": "ID viaggio",
+          "description": "Forza l'ack su uno specifico viaggio (ignora `scope`)."
+        },
+        "entry_id": {
+          "name": "Entry ID",
+          "description": "ID della config entry (facoltativo)."
+        }
+      }
+    },
+    "unacknowledge_alert": {
+      "name": "Ripristina alert",
+      "description": "Annulla la conferma di un alert: torna a essere segnalato come attivo.",
+      "fields": {
+        "alert_code": {
+          "name": "Codice alert",
+          "description": "Codice numerico dell'alert da ripristinare."
+        },
+        "scope": {
+          "name": "Ambito",
+          "description": "Ambito: last_trip, today, month o total."
+        },
+        "trip_id": {
+          "name": "ID viaggio",
+          "description": "Forza il ripristino su uno specifico viaggio (ignora `scope`)."
+        },
+        "entry_id": {
+          "name": "Entry ID",
+          "description": "ID della config entry (facoltativo)."
+        }
+      }
+    },
+    "reset_alert_acknowledgments": {
+      "name": "Reset conferme alert",
+      "description": "Cancella tutte le conferme memorizzate.",
+      "fields": {
+        "entry_id": {
+          "name": "Entry ID",
+          "description": "ID della config entry (facoltativo)."
+        }
+      }
+    }
   }
 }

@@ -90,7 +90,7 @@ SENSOR_DESCRIPTIONS: tuple[MyOpelSensorDescription, ...] = (
         name="Ultimo viaggio – Carburante consumato",
         native_unit_of_measurement=UnitOfVolume.LITERS,
         device_class=SensorDeviceClass.VOLUME,
-        state_class=SensorStateClass.MEASUREMENT,
+        state_class=None,
         icon="mdi:fuel",
     ),
     MyOpelSensorDescription(
@@ -285,7 +285,7 @@ SENSOR_DESCRIPTIONS: tuple[MyOpelSensorDescription, ...] = (
         name="Mese corrente – Carburante totale",
         native_unit_of_measurement=UnitOfVolume.LITERS,
         device_class=SensorDeviceClass.VOLUME,
-        state_class=SensorStateClass.MEASUREMENT,
+        state_class=None,
         icon="mdi:fuel",
     ),
     MyOpelSensorDescription(
@@ -363,7 +363,7 @@ SENSOR_DESCRIPTIONS: tuple[MyOpelSensorDescription, ...] = (
         name="Oggi – Carburante totale",
         native_unit_of_measurement=UnitOfVolume.LITERS,
         device_class=SensorDeviceClass.VOLUME,
-        state_class=SensorStateClass.MEASUREMENT,
+        state_class=None,
         icon="mdi:fuel",
     ),
     MyOpelSensorDescription(
@@ -441,7 +441,7 @@ SENSOR_DESCRIPTIONS: tuple[MyOpelSensorDescription, ...] = (
         name="Rifornimento – Carburante consumato",
         native_unit_of_measurement=UnitOfVolume.LITERS,
         device_class=SensorDeviceClass.VOLUME,
-        state_class=SensorStateClass.MEASUREMENT,
+        state_class=None,
         icon="mdi:fuel",
     ),
     MyOpelSensorDescription(

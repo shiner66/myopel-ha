@@ -53,8 +53,33 @@ def _decode_header_value(raw: str) -> str:
     return "".join(decoded)
 
 
+def _cleanup_stale_snapshots(save_path: Path, keep_name: str) -> int:
+    """Remove every .myop file in `save_path` except the one named `keep_name`.
+
+    MyOpel snapshots are cumulative, so holding on to older files would only
+    feed the parser's safety-net merge with stale data and waste disk space.
+    """
+    removed = 0
+    for old in save_path.glob("*.myop"):
+        if old.name == keep_name:
+            continue
+        try:
+            old.unlink()
+            removed += 1
+            _LOGGER.debug("MyOpel IMAP: rimosso snapshot obsoleto %s", old.name)
+        except OSError as err:
+            _LOGGER.debug("MyOpel IMAP: impossibile rimuovere %s (%s)", old.name, err)
+    return removed
+
+
 def _fetch_myop_attachments(config: dict, save_folder: str) -> list[str]:
-    """Connect to IMAP, find unread + recent emails with .myop attachments, save them."""
+    """Connect to IMAP, save the single most recent .myop attachment.
+
+    MyOpel emails carry cumulative snapshots — only the latest one matters.
+    We iterate newest → oldest and keep the first email that actually has a
+    .myop attachment; everything else is ignored. Older snapshots already on
+    disk are deleted afterwards.
+    """
     server       = config[CONF_IMAP_SERVER]
     port         = config.get(CONF_IMAP_PORT, DEFAULT_IMAP_PORT)
     username     = config[CONF_IMAP_USERNAME]
@@ -65,6 +90,7 @@ def _fetch_myop_attachments(config: dict, save_folder: str) -> list[str]:
     save_path = Path(save_folder)
     save_path.mkdir(parents=True, exist_ok=True)
     saved: list[str] = []
+    kept_name: str | None = None
 
     try:
         conn = imaplib.IMAP4_SSL(server, port)
@@ -89,7 +115,10 @@ def _fetch_myop_attachments(config: dict, save_folder: str) -> list[str]:
                 _LOGGER.debug("MyOpel IMAP: nessuna UNSEEN, trovati %d msg negli ultimi 7gg",
                               len(message_ids))
 
-        for msg_id in message_ids:
+        # IMAP assigns sequence numbers in arrival order — highest == newest.
+        message_ids_sorted = sorted(message_ids, key=lambda b: int(b), reverse=True)
+
+        for msg_id in message_ids_sorted:
             status, msg_data = conn.fetch(msg_id, "(RFC822)")
             if status != "OK":
                 continue
@@ -107,30 +136,35 @@ def _fetch_myop_attachments(config: dict, save_folder: str) -> list[str]:
                 safe_name = re.sub(r'[^\w.\-]', '_', filename)
                 dest = save_path / safe_name
                 payload = part.get_payload(decode=True)
-                if payload:
-                    # Skip if the file on disk already matches the payload:
-                    # rewriting would bump mtime and wake the watchdog for
-                    # nothing — the main source of spurious refreshes and
-                    # oscillating sensor values.
-                    if dest.is_file():
-                        try:
-                            if dest.read_bytes() == payload:
-                                found = True
-                                continue
-                        except OSError:
-                            pass
-                    dest.write_bytes(payload)
-                    saved.append(str(dest))
-                    found = True
-                    _LOGGER.info("MyOpel IMAP: salvato → %s", dest)
+                if not payload:
+                    continue
+                kept_name = safe_name
+                # Skip the write if the file on disk already matches the payload:
+                # rewriting would bump mtime and wake the watchdog for nothing.
+                if dest.is_file():
+                    try:
+                        if dest.read_bytes() == payload:
+                            found = True
+                            break
+                    except OSError:
+                        pass
+                dest.write_bytes(payload)
+                saved.append(str(dest))
+                found = True
+                _LOGGER.info("MyOpel IMAP: salvato → %s", dest)
+                break  # one .myop per email is enough
             if found:
                 conn.store(msg_id, "+FLAGS", "\\Seen")
+                break  # newest snapshot handled — ignore anything older
 
         conn.logout()
     except imaplib.IMAP4.error as err:
         _LOGGER.error("MyOpel IMAP error: %s", err)
     except OSError as err:
         _LOGGER.error("MyOpel IMAP connessione fallita: %s", err)
+
+    if kept_name:
+        _cleanup_stale_snapshots(save_path, kept_name)
 
     return saved
 

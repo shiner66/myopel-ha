@@ -547,21 +547,45 @@ class MyOpelCoordinator(DataUpdateCoordinator):
         folder = Path(self.file_path)
         folder.mkdir(parents=True, exist_ok=True)
 
-        # Accept .myop (legacy), trips.json, trips.export (iOS Shortcuts); pick newest
+        # Accept .myop (legacy), trips.json, trips.export (iOS Shortcuts).
+        # Parse ALL candidate files and merge their trips by id: the MyOpel
+        # IMAP feed sends one snapshot per email and the watchdog triggers a
+        # refresh on every file write, so picking a single "newest" file
+        # makes the result depend on a filesystem mtime race — producing the
+        # oscillating sensor values reported by users. Merging is
+        # deterministic and loss-free.
         candidates = list(folder.glob("*.myop")) + list(folder.glob("trips.json")) + (
             [folder / "trips.export"] if (folder / "trips.export").is_file() else []
         )
         if not candidates:
             raise _NoFileYet
-        candidates.sort(key=lambda p: p.stat().st_mtime, reverse=True)
-        path = candidates[0]
-        _LOGGER.debug("MyOpel: lettura file %s", path.name)
+        # Oldest → newest so later files overwrite earlier ones on trip-id collision
+        candidates.sort(key=lambda p: p.stat().st_mtime)
 
-        raw = json.loads(path.read_text(encoding="utf-8"))
+        vin = "unknown"
+        merged_trips: dict = {}
+        for path in candidates:
+            try:
+                raw = json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError) as err:
+                _LOGGER.warning("MyOpel: impossibile leggere %s (%s), ignoro", path.name, err)
+                continue
+            if not raw:
+                continue
+            vehicle = raw[0]
+            v = vehicle.get("vin")
+            if v:
+                vin = v
+            for t in vehicle.get("trips", []):
+                tid = t.get("id")
+                if tid is None:
+                    continue
+                merged_trips[tid] = t
 
-        vehicle = raw[0]
-        vin = vehicle.get("vin", "unknown")
-        trips = vehicle.get("trips", [])
+        trips = list(merged_trips.values())
+        _LOGGER.debug(
+            "MyOpel: unione di %d file → %d trip distinti", len(candidates), len(trips)
+        )
 
         if not trips:
             raise UpdateFailed("No trips found in file")

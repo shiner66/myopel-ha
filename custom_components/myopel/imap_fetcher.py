@@ -108,6 +108,17 @@ def _fetch_myop_attachments(config: dict, save_folder: str) -> list[str]:
                 dest = save_path / safe_name
                 payload = part.get_payload(decode=True)
                 if payload:
+                    # Skip if the file on disk already matches the payload:
+                    # rewriting would bump mtime and wake the watchdog for
+                    # nothing — the main source of spurious refreshes and
+                    # oscillating sensor values.
+                    if dest.is_file():
+                        try:
+                            if dest.read_bytes() == payload:
+                                found = True
+                                continue
+                        except OSError:
+                            pass
                     dest.write_bytes(payload)
                     saved.append(str(dest))
                     found = True

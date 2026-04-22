@@ -214,6 +214,9 @@ _STUBS: dict[str, Any] = {
     "homeassistant.helpers": MagicMock(),
     "homeassistant.helpers.entity": _make({"DeviceInfo": DeviceInfo}),
     "homeassistant.helpers.entity_platform": MagicMock(),
+    "homeassistant.helpers.event": _make({
+        "async_track_time_interval": lambda *a, **kw: (lambda: None),
+    }),
     "homeassistant.helpers.selector": _make({
         "NumberSelector": NumberSelector,
         "NumberSelectorConfig": NumberSelectorConfig,

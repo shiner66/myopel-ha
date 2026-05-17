@@ -51,7 +51,6 @@ _PID_MAP: dict[str, tuple[str, str]] = {
     "obd_trip_max_rpm":               ("Giri motore",                                                     "max"),
     "obd_trip_coolant_temp_max_c":    ("Temperatura liquido raffreddamento motore",                       "max"),
     "obd_trip_oil_temp_max_c":        ("[ECM] Oil temperature",                                           "max"),
-    "obd_trip_avg_fuel_lph":          ("Consumo istantaneo di carburante calcolato",                      "mean"),
     "obd_trip_odometer_km":           ("[ECM] Total mileage",                                             "last"),
     "obd_trip_air_temp_c":            ("Temperatura d'aria ambiente",                                     "first"),
     # ── DPF / emissions ──────────────────────────────────────────────────────
@@ -62,7 +61,6 @@ _PID_MAP: dict[str, tuple[str, str]] = {
     "obd_trip_exhaust_after_cat_c":   ("[ECM] Exhaust gas temperature after pre-catalytic converter",     "max"),
     # ── Diagnostics ──────────────────────────────────────────────────────────
     "obd_trip_battery_startup_v":     ("[ECM] Minimum battery voltage at startup",                        "last"),
-    "obd_trip_ss_switch":             ("[ECM] Stop and Start switch",                                     "last"),
     "obd_trip_oil_dilution_pct":      ("[ECM] Evaluation of the degree of dilution of motor oil",         "last"),
 }
 
@@ -81,7 +79,8 @@ _LTS_META: dict[str, tuple[str, str | None]] = {
     "obd_trip_max_rpm":              ("OBD – Giri motore massimi",        "rpm"),
     "obd_trip_coolant_temp_max_c":   ("OBD – Temp. raffreddamento max",   "°C"),
     "obd_trip_oil_temp_max_c":       ("OBD – Temperatura olio max",       "°C"),
-    "obd_trip_avg_fuel_lph":         ("OBD – Consumo carburante medio",   "L/h"),
+    "obd_trip_fuel_consumed_l":      ("OBD – Carburante consumato",       "L"),
+    "obd_trip_consumption_l100km":   ("OBD – Consumo medio",              "L/100km"),
     "obd_trip_air_temp_c":           ("OBD – Temperatura aria esterna",   "°C"),
     "obd_trip_dpf_soot_pct":         ("OBD – DPF intasamento",            "%"),
     "obd_trip_dpf_regen_capability": ("OBD – Capacità rigenerazione DPF", "%"),
@@ -193,11 +192,14 @@ class MyOpelObdCoordinator(DataUpdateCoordinator):
             value = trip_data.get(sensor_key)
             if value is None:
                 continue
-            # Use per-PID min/max/mean from generic stats when available;
-            # fall back to the curated aggregated scalar otherwise.
-            pid_name = _PID_MAP[sensor_key][0]
-            slug = _slugify_pid(pid_name)
-            pid_stats = pid_values.get(slug) or {}
+            # Use per-PID min/max/mean from generic stats when available.
+            # Computed keys (e.g. fuel totals) are not in _PID_MAP so fall back
+            # to the curated scalar for all three stat fields.
+            pid_name_agg = _PID_MAP.get(sensor_key)
+            pid_stats = (
+                pid_values.get(_slugify_pid(pid_name_agg[0])) or {}
+                if pid_name_agg else {}
+            )
             v = float(value)
             mean = pid_stats.get("mean", v)
             min_val = pid_stats.get("min", v)
@@ -357,24 +359,30 @@ def _compute_stats(
     }
 
     # ── Curated sensor values ────────────────────────────────────────────────
-    _FUEL_MAX = 200.0
     _SOOT_MAX = 150.0
     for key, (pid_name, agg) in _PID_MAP.items():
         vals = _vals(pid_name)
         if not vals:
             result[key] = None
             continue
-        if key == "obd_trip_avg_fuel_lph":
-            vals = [v for v in vals if v < _FUEL_MAX]
-            if not vals:
-                result[key] = None
-                continue
         if key == "obd_trip_dpf_soot_pct":
             vals = [v for v in vals if v <= _SOOT_MAX]
             if not vals:
                 result[key] = None
                 continue
-        result[key] = round(_aggregate(vals, agg), 2 if key.endswith(("_km", "_lph")) else 1)
+        result[key] = round(_aggregate(vals, agg), 2 if key.endswith("_km") else 1)
+
+    # ── Fuel consumption via trapezoid integration ────────────────────────────
+    _FUEL_PID = "Consumo istantaneo di carburante calcolato"
+    total_l = _trapezoid_integrate_lph(
+        pids.get(_FUEL_PID) or [], t_start, t_end or t_start
+    )
+    result["obd_trip_fuel_consumed_l"] = round(total_l, 3) if total_l is not None else None
+    dist = result.get("obd_trip_distance_km")
+    if total_l is not None and dist and dist > 0:
+        result["obd_trip_consumption_l100km"] = round(total_l / dist * 100.0, 2)
+    else:
+        result["obd_trip_consumption_l100km"] = None
 
     # Coerce integer-like quantities
     for k in ("obd_trip_odometer_km", "obd_trip_avg_rpm", "obd_trip_max_rpm"):
@@ -472,6 +480,32 @@ def _classify_pid(vals: list[float], unit: str | None) -> str:
     if not has_unit and all(v == int(v) for v in unique) and len(unique) <= 32:
         return "discrete"
     return "number"
+
+
+def _trapezoid_integrate_lph(
+    recs: list[tuple[float, float]],
+    t_start: float,
+    t_end: float,
+    max_lph: float = 200.0,
+) -> float | None:
+    """Time-integrate L/h samples inside the engine window → total litres.
+
+    Uses the trapezoid rule so uneven sampling doesn't bias the result.
+    Samples outside the window or above max_lph are discarded.
+    Returns None when fewer than two valid samples exist.
+    """
+    window = sorted(
+        ((t, v) for t, v in recs if t_start <= t <= t_end and 0.0 <= v < max_lph),
+        key=lambda r: r[0],
+    )
+    if len(window) < 2:
+        return None
+    return sum(
+        (window[i][1] + window[i + 1][1]) / 2.0
+        * (window[i + 1][0] - window[i][0])
+        / 3600.0
+        for i in range(len(window) - 1)
+    )
 
 
 def _aggregate(vals: list[float], agg: str) -> float:

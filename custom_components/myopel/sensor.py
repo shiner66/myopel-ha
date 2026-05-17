@@ -549,12 +549,21 @@ OBD_SENSOR_DESCRIPTIONS: tuple[MyOpelSensorDescription, ...] = (
         icon="mdi:oil-temperature",
     ),
     MyOpelSensorDescription(
-        key="obd_trip_avg_fuel_lph",
-        data_key="obd_trip_avg_fuel_lph",
-        name="OBD – Consumo carburante medio",
-        native_unit_of_measurement="L/h",
+        key="obd_trip_fuel_consumed_l",
+        data_key="obd_trip_fuel_consumed_l",
+        name="OBD – Carburante consumato",
+        native_unit_of_measurement=UnitOfVolume.LITERS,
+        device_class=SensorDeviceClass.VOLUME,
         state_class=SensorStateClass.MEASUREMENT,
         icon="mdi:fuel",
+    ),
+    MyOpelSensorDescription(
+        key="obd_trip_consumption_l100km",
+        data_key="obd_trip_consumption_l100km",
+        name="OBD – Consumo medio",
+        native_unit_of_measurement="L/100km",
+        state_class=SensorStateClass.MEASUREMENT,
+        icon="mdi:gauge",
     ),
     MyOpelSensorDescription(
         key="obd_trip_odometer_km",
@@ -630,12 +639,6 @@ OBD_SENSOR_DESCRIPTIONS: tuple[MyOpelSensorDescription, ...] = (
         native_unit_of_measurement="V",
         state_class=SensorStateClass.MEASUREMENT,
         icon="mdi:battery-low",
-    ),
-    MyOpelSensorDescription(
-        key="obd_trip_ss_switch",
-        data_key="obd_trip_ss_switch",
-        name="OBD – Start & Stop abilitato",
-        icon="mdi:engine-off",
     ),
     MyOpelSensorDescription(
         key="obd_trip_oil_dilution_pct",
@@ -851,7 +854,6 @@ class MyOpelAlertActiveBinarySensor(CoordinatorEntity[MyOpelCoordinator], Binary
 
 _OBD_LABELED: dict[str, tuple[str, str]] = {
     # data_key: (label_when_zero, label_when_nonzero)
-    "obd_trip_ss_switch": ("Attivo", "Disattivato"),
     "obd_trip_dpf_regen_active": ("No", "Sì"),
 }
 

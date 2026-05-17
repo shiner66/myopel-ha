@@ -196,31 +196,6 @@ class TestSensorMetadata:
         assert sensor.available is True
 
 
-# ── OBD Start & Stop inversion ────────────────────────────────────────────────
-
-class TestObdStopAndStart:
-    """Raw value 0 = system enabled; raw 1 = driver disabled it."""
-
-    def _make_ss_sensor(self, raw_value):
-        coord = DataUpdateCoordinator()
-        coord.data = {"obd_trip_ss_switch": raw_value}
-        entry = ConfigEntry()
-        desc = MyOpelSensorDescription(
-            key="obd_trip_ss_switch",
-            data_key="obd_trip_ss_switch",
-            name="OBD – Start & Stop",
-        )
-        return MyOpelObdSensor(coord, desc, "TESTVIN", entry)
-
-    def test_zero_means_active(self):
-        assert self._make_ss_sensor(0).native_value == "Attivo"
-
-    def test_one_means_disabled(self):
-        assert self._make_ss_sensor(1).native_value == "Disattivato"
-
-    def test_none_passes_through(self):
-        assert self._make_ss_sensor(None).native_value is None
-
 
 class TestObdDpfRegenActive:
     """DPF regen status is a 0/1 flag — render as Sì/No, not a float."""

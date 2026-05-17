@@ -14,6 +14,7 @@ from custom_components.myopel.coordinator_obd import (
     _compute_stats,
     _parse_csv_file,
     _slugify_pid,
+    _trapezoid_integrate_lph,
 )
 
 
@@ -187,14 +188,85 @@ class TestComputeStats:
         result = _compute_stats(pids, {}, tmp_path / "x.csv")
         assert result["obd_trip_dpf_soot_pct"] == 75.0
 
+    def test_ss_switch_not_in_preset(self, tmp_path):
+        pids = {
+            "Giri motore": [(0.0, 800.0)],
+            "[ECM] Stop and Start switch": [(0.0, 0.0)],
+        }
+        result = _compute_stats(pids, {}, tmp_path / "x.csv")
+        assert "obd_trip_ss_switch" not in result
+
     def test_dpf_since_regen_not_in_preset(self, tmp_path):
-        # Broken PID was removed from the curated preset — its key must be absent.
         pids = {
             "Giri motore": [(0.0, 800.0)],
             "[ECM] Distance traveled since the last regeneration": [(0.0, 9999.0)],
         }
         result = _compute_stats(pids, {}, tmp_path / "x.csv")
         assert "obd_trip_dpf_since_regen_km" not in result
+
+
+# ── Fuel integration ──────────────────────────────────────────────────────────
+
+class TestFuelIntegration:
+    def test_trapezoid_constant_rate(self):
+        # 3.6 L/h for exactly 1 hour (3600s) → 3.6 L
+        recs = [(0.0, 3.6), (3600.0, 3.6)]
+        assert _trapezoid_integrate_lph(recs, 0.0, 3600.0) == pytest.approx(3.6, rel=1e-6)
+
+    def test_trapezoid_ramp(self):
+        # Linearly rising from 0 to 7.2 L/h over 3600s → average 3.6 L/h → 3.6 L
+        recs = [(0.0, 0.0), (3600.0, 7.2)]
+        assert _trapezoid_integrate_lph(recs, 0.0, 3600.0) == pytest.approx(3.6, rel=1e-6)
+
+    def test_trapezoid_short_trip(self):
+        # 3.6 L/h for 2 seconds → 3.6/3600 * 2 ≈ 0.002 L
+        recs = [(0.0, 3.6), (2.0, 3.6)]
+        assert _trapezoid_integrate_lph(recs, 0.0, 2.0) == pytest.approx(0.002, rel=1e-6)
+
+    def test_trapezoid_filters_outliers(self):
+        # Spike at 999 L/h must be ignored; result is just the two valid samples
+        recs = [(0.0, 3.6), (1.0, 999.0), (2.0, 3.6)]
+        result = _trapezoid_integrate_lph(recs, 0.0, 2.0)
+        # Only (0.0, 3.6) and (2.0, 3.6) survive: 3.6 * 2 / 3600 = 0.002 L
+        assert result == pytest.approx(0.002, rel=1e-6)
+
+    def test_trapezoid_clips_to_engine_window(self):
+        # Samples outside the engine window must be excluded
+        recs = [(0.0, 3.6), (10.0, 3.6), (20.0, 3.6)]
+        # Window is 5..15 → only the middle sample (10.0, 3.6) survives → < 2 → None
+        assert _trapezoid_integrate_lph(recs, 5.0, 15.0) is None
+
+    def test_trapezoid_single_sample_returns_none(self):
+        recs = [(0.0, 5.0)]
+        assert _trapezoid_integrate_lph(recs, 0.0, 10.0) is None
+
+    def test_compute_stats_fuel_consumed(self, tmp_path):
+        pids = {
+            "Giri motore": [(0.0, 800.0), (3600.0, 800.0)],
+            "Consumo istantaneo di carburante calcolato": [(0.0, 1.8), (3600.0, 1.8)],
+            "Distanza percorsa:": [(0.0, 0.0), (3600.0, 30.0)],
+        }
+        result = _compute_stats(
+            pids,
+            {"Consumo istantaneo di carburante calcolato": "L/h"},
+            tmp_path / "x.csv",
+        )
+        assert result["obd_trip_fuel_consumed_l"] == pytest.approx(1.8, rel=1e-4)
+        assert result["obd_trip_consumption_l100km"] == pytest.approx(6.0, rel=1e-4)
+
+    def test_compute_stats_no_fuel_pid(self, tmp_path):
+        pids = {"Giri motore": [(0.0, 800.0), (1.0, 1000.0)]}
+        result = _compute_stats(pids, {}, tmp_path / "x.csv")
+        assert result["obd_trip_fuel_consumed_l"] is None
+        assert result["obd_trip_consumption_l100km"] is None
+
+    def test_avg_fuel_lph_not_in_preset(self, tmp_path):
+        pids = {
+            "Giri motore": [(0.0, 800.0)],
+            "Consumo istantaneo di carburante calcolato": [(0.0, 4.0)],
+        }
+        result = _compute_stats(pids, {}, tmp_path / "x.csv")
+        assert "obd_trip_avg_fuel_lph" not in result
 
 
 # ── End-to-end parse + persistence ───────────────────────────────────────────

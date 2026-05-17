@@ -19,6 +19,7 @@ from .const import CONF_TIME_OFFSET, DEFAULT_TIME_OFFSET
 from homeassistant.const import (
     PERCENTAGE,
     UnitOfLength,
+    UnitOfTemperature,
     UnitOfTime,
     UnitOfVolume,
 )
@@ -29,6 +30,7 @@ from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import DOMAIN
 from . import MyOpelCoordinator
+from .coordinator_obd import MyOpelObdCoordinator
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -478,6 +480,110 @@ SENSOR_DESCRIPTIONS: tuple[MyOpelSensorDescription, ...] = (
 )
 
 
+OBD_SENSOR_DESCRIPTIONS: tuple[MyOpelSensorDescription, ...] = (
+    MyOpelSensorDescription(
+        key="obd_trip_distance_km",
+        data_key="obd_trip_distance_km",
+        name="OBD – Distanza viaggio",
+        native_unit_of_measurement=UnitOfLength.KILOMETERS,
+        device_class=SensorDeviceClass.DISTANCE,
+        state_class=SensorStateClass.MEASUREMENT,
+        icon="mdi:map-marker-distance",
+    ),
+    MyOpelSensorDescription(
+        key="obd_trip_duration_min",
+        data_key="obd_trip_duration_min",
+        name="OBD – Durata viaggio",
+        native_unit_of_measurement=UnitOfTime.MINUTES,
+        state_class=SensorStateClass.MEASUREMENT,
+        icon="mdi:timer-outline",
+    ),
+    MyOpelSensorDescription(
+        key="obd_trip_avg_speed_kmh",
+        data_key="obd_trip_avg_speed_kmh",
+        name="OBD – Velocità media GPS",
+        native_unit_of_measurement="km/h",
+        state_class=SensorStateClass.MEASUREMENT,
+        icon="mdi:speedometer",
+    ),
+    MyOpelSensorDescription(
+        key="obd_trip_max_speed_kmh",
+        data_key="obd_trip_max_speed_kmh",
+        name="OBD – Velocità massima GPS",
+        native_unit_of_measurement="km/h",
+        state_class=SensorStateClass.MEASUREMENT,
+        icon="mdi:speedometer",
+    ),
+    MyOpelSensorDescription(
+        key="obd_trip_avg_rpm",
+        data_key="obd_trip_avg_rpm",
+        name="OBD – Giri motore medi",
+        native_unit_of_measurement="rpm",
+        state_class=SensorStateClass.MEASUREMENT,
+        icon="mdi:engine",
+    ),
+    MyOpelSensorDescription(
+        key="obd_trip_max_rpm",
+        data_key="obd_trip_max_rpm",
+        name="OBD – Giri motore massimi",
+        native_unit_of_measurement="rpm",
+        state_class=SensorStateClass.MEASUREMENT,
+        icon="mdi:engine",
+    ),
+    MyOpelSensorDescription(
+        key="obd_trip_coolant_temp_max_c",
+        data_key="obd_trip_coolant_temp_max_c",
+        name="OBD – Temp. raffreddamento max",
+        native_unit_of_measurement=UnitOfTemperature.CELSIUS,
+        device_class=SensorDeviceClass.TEMPERATURE,
+        state_class=SensorStateClass.MEASUREMENT,
+        icon="mdi:thermometer",
+    ),
+    MyOpelSensorDescription(
+        key="obd_trip_oil_temp_max_c",
+        data_key="obd_trip_oil_temp_max_c",
+        name="OBD – Temperatura olio max",
+        native_unit_of_measurement=UnitOfTemperature.CELSIUS,
+        device_class=SensorDeviceClass.TEMPERATURE,
+        state_class=SensorStateClass.MEASUREMENT,
+        icon="mdi:oil-temperature",
+    ),
+    MyOpelSensorDescription(
+        key="obd_trip_avg_fuel_lph",
+        data_key="obd_trip_avg_fuel_lph",
+        name="OBD – Consumo carburante medio",
+        native_unit_of_measurement="L/h",
+        state_class=SensorStateClass.MEASUREMENT,
+        icon="mdi:fuel",
+    ),
+    MyOpelSensorDescription(
+        key="obd_trip_odometer_km",
+        data_key="obd_trip_odometer_km",
+        name="OBD – Chilometraggio ECU",
+        native_unit_of_measurement=UnitOfLength.KILOMETERS,
+        device_class=SensorDeviceClass.DISTANCE,
+        state_class=SensorStateClass.TOTAL_INCREASING,
+        icon="mdi:counter",
+    ),
+    MyOpelSensorDescription(
+        key="obd_trip_air_temp_c",
+        data_key="obd_trip_air_temp_c",
+        name="OBD – Temperatura aria esterna",
+        native_unit_of_measurement=UnitOfTemperature.CELSIUS,
+        device_class=SensorDeviceClass.TEMPERATURE,
+        state_class=SensorStateClass.MEASUREMENT,
+        icon="mdi:thermometer",
+    ),
+    MyOpelSensorDescription(
+        key="obd_trip_start",
+        data_key="obd_trip_start",
+        name="OBD – Inizio viaggio",
+        device_class=SensorDeviceClass.TIMESTAMP,
+        icon="mdi:clock-start",
+    ),
+)
+
+
 async def async_setup_entry(
     hass: HomeAssistant,
     entry: ConfigEntry,
@@ -485,13 +591,23 @@ async def async_setup_entry(
 ) -> None:
     """Set up MyOpel sensors and the alert binary sensor."""
     coordinator: MyOpelCoordinator = hass.data[DOMAIN][entry.entry_id]["coordinator"]
-    vin = coordinator.data.get("vin", "unknown")
+    vin = coordinator.data.get("vin", "unknown") if coordinator.data else "unknown"
 
     entities: list = [
         MyOpelSensor(coordinator, description, vin, entry)
         for description in SENSOR_DESCRIPTIONS
     ]
     entities.append(MyOpelAlertActiveBinarySensor(coordinator, vin, entry.entry_id))
+
+    obd_coordinator: MyOpelObdCoordinator | None = (
+        hass.data[DOMAIN][entry.entry_id].get("obd_coordinator")
+    )
+    if obd_coordinator is not None:
+        entities.extend(
+            MyOpelObdSensor(obd_coordinator, description, vin, entry)
+            for description in OBD_SENSOR_DESCRIPTIONS
+        )
+
     async_add_entities(entities)
 
 
@@ -657,4 +773,56 @@ class MyOpelAlertActiveBinarySensor(CoordinatorEntity[MyOpelCoordinator], Binary
             "acknowledged_labels": data.get("last_trip_acked_alert_codes"),
             "unacknowledged_labels": data.get("last_trip_unack_alert_codes"),
             "code_labels": data.get("last_trip_alert_labels") or {},
+        }
+
+
+class MyOpelObdSensor(CoordinatorEntity[MyOpelObdCoordinator], SensorEntity):
+    """Sensor sourced from a CarScanner OBD CSV export."""
+
+    entity_description: MyOpelSensorDescription
+    _attr_has_entity_name = True
+
+    def __init__(
+        self,
+        coordinator: MyOpelObdCoordinator,
+        description: MyOpelSensorDescription,
+        vin: str,
+        entry: ConfigEntry,
+    ) -> None:
+        super().__init__(coordinator)
+        self.entity_description = description
+        self._vin = vin
+        self._entry = entry
+        self._attr_unique_id = f"{entry.entry_id}_obd_{description.key}"
+        self._attr_device_info = DeviceInfo(
+            identifiers={(DOMAIN, vin)},
+            name=f"Opel ({vin[-6:]})",
+            manufacturer="Opel",
+            model="MyOpel Export",
+            serial_number=vin,
+        )
+
+    @property
+    def available(self) -> bool:
+        return super().available and bool(self.coordinator.data)
+
+    @property
+    def native_value(self) -> Any:
+        value = self.coordinator.data.get(self.entity_description.data_key)
+        if (
+            self.entity_description.device_class == SensorDeviceClass.TIMESTAMP
+            and isinstance(value, str)
+        ):
+            from datetime import datetime, timezone
+            try:
+                return datetime.fromisoformat(value.rstrip("Z")).replace(tzinfo=timezone.utc)
+            except (ValueError, AttributeError):
+                return None
+        return value
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        return {
+            "vin": self._vin,
+            "obd_filename": (self.coordinator.data or {}).get("obd_filename"),
         }

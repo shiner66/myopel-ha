@@ -26,11 +26,14 @@ from .const import (
     CONF_MIN_TRIP_DISTANCE,
     CONF_MIN_TRIP_DISTANCE_ENABLED,
     CONF_SCAN_INTERVAL,
+    CONF_OBD_DISABLED,
+    CONF_OBD_FOLDER,
     CONF_TIME_OFFSET,
     DEFAULT_IMAP_FOLDER,
     DEFAULT_IMAP_INTERVAL,
     DEFAULT_IMAP_PORT,
     DEFAULT_MIN_TRIP_DISTANCE,
+    DEFAULT_OBD_FOLDER,
     DEFAULT_SCAN_INTERVAL,
     DEFAULT_TIME_OFFSET,
     DOMAIN,
@@ -280,6 +283,14 @@ class MyOpelOptionsFlow(OptionsFlow):
                         mode=selector.NumberSelectorMode.BOX,
                     )
                 ),
+                vol.Optional(
+                    CONF_OBD_DISABLED,
+                    default=o.get(CONF_OBD_DISABLED, False),
+                ): bool,
+                vol.Optional(
+                    CONF_OBD_FOLDER,
+                    default=o.get(CONF_OBD_FOLDER, d.get(CONF_OBD_FOLDER, DEFAULT_OBD_FOLDER)),
+                ): str,
                 vol.Optional(
                     CONF_IMAP_DISABLED,
                     default=o.get(CONF_IMAP_DISABLED, False),

@@ -28,6 +28,11 @@ CONF_MIN_TRIP_DISTANCE = "min_trip_distance"
 CONF_MIN_TRIP_DISTANCE_ENABLED = "min_trip_distance_enabled"
 DEFAULT_MIN_TRIP_DISTANCE = 1.0  # km
 
+# OBD / CarScanner CSV source
+CONF_OBD_FOLDER = "obd_folder"
+CONF_OBD_DISABLED = "obd_disabled"
+DEFAULT_OBD_FOLDER = "/config/myopel_obd/"
+
 # Timestamp UTC offset correction
 # Stellantis marks timestamps as "Z" (UTC) but the values are always in the
 # server's local wall-clock time (Italy = CET = UTC+1 in winter, CEST = UTC+2

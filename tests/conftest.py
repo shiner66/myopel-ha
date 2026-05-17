@@ -20,6 +20,7 @@ class SensorDeviceClass(str, Enum):
     DISTANCE = "distance"
     DURATION = "duration"
     ENERGY = "energy"
+    TEMPERATURE = "temperature"
     TIMESTAMP = "timestamp"
     VOLUME = "volume"
 
@@ -44,6 +45,12 @@ class UnitOfTime(str, Enum):
     SECONDS = "s"
     HOURS = "h"
     DAYS = "d"
+
+
+class UnitOfTemperature(str, Enum):
+    CELSIUS = "°C"
+    FAHRENHEIT = "°F"
+    KELVIN = "K"
 
 
 class UnitOfVolume(str, Enum):
@@ -203,6 +210,7 @@ _STUBS: dict[str, Any] = {
     "homeassistant.const": _make({
         "PERCENTAGE": PERCENTAGE,
         "UnitOfLength": UnitOfLength,
+        "UnitOfTemperature": UnitOfTemperature,
         "UnitOfTime": UnitOfTime,
         "UnitOfVolume": UnitOfVolume,
     }),

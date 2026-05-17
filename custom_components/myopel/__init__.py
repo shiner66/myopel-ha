@@ -34,6 +34,9 @@ from .const import (
 from .const import (
     CONF_MIN_TRIP_DISTANCE, CONF_MIN_TRIP_DISTANCE_ENABLED, DEFAULT_MIN_TRIP_DISTANCE,
 )
+from .const import (
+    CONF_OBD_FOLDER, CONF_OBD_DISABLED, DEFAULT_OBD_FOLDER,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -235,6 +238,62 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         _LOGGER.warning("MyOpel: watchdog non disponibile, uso solo polling (%s)", exc)
         observer = None
 
+    # ── OBD coordinator (CarScanner CSV) ────────────────────────────────────
+    obd_coordinator = None
+    obd_observer = None
+    obd_folder = entry.options.get(CONF_OBD_FOLDER, entry.data.get(CONF_OBD_FOLDER, ""))
+    obd_disabled = entry.options.get(CONF_OBD_DISABLED, False)
+    if not obd_disabled and obd_folder:
+        from .coordinator_obd import MyOpelObdCoordinator
+
+        obd_coordinator = MyOpelObdCoordinator(hass, obd_folder, scan_interval)
+
+        try:
+            from watchdog.observers import Observer
+
+            obd_path = Path(obd_folder)
+            obd_path.mkdir(parents=True, exist_ok=True)
+
+            obd_handler = _make_watchdog_handler(obd_coordinator)
+            if obd_handler is not None:
+                obd_observer = Observer()
+
+                class _CsvHandler(type(obd_handler)):
+                    @staticmethod
+                    def _is_relevant(path: str) -> bool:
+                        return path.endswith(".csv")
+
+                # reuse the same observer infrastructure with a CSV-aware dispatcher
+                from watchdog.events import FileSystemEventHandler
+
+                class _ObdHandler(FileSystemEventHandler):
+                    def _trigger(self_inner) -> None:
+                        asyncio.run_coroutine_threadsafe(
+                            obd_coordinator.async_request_refresh(),
+                            hass.loop,
+                        )
+
+                    def on_modified(self_inner, event):
+                        if not event.is_directory and event.src_path.endswith(".csv"):
+                            self_inner._trigger()
+
+                    def on_created(self_inner, event):
+                        if not event.is_directory and event.src_path.endswith(".csv"):
+                            self_inner._trigger()
+
+                    def on_moved(self_inner, event):
+                        if not event.is_directory and event.dest_path.endswith(".csv"):
+                            self_inner._trigger()
+
+                obd_observer.schedule(_ObdHandler(), str(obd_path), recursive=False)
+                obd_observer.start()
+                _LOGGER.debug("MyOpel OBD: watchdog avviato su %s", obd_path)
+        except Exception as exc:  # noqa: BLE001
+            _LOGGER.warning("MyOpel OBD: watchdog non disponibile (%s)", exc)
+            obd_observer = None
+
+        await obd_coordinator.async_config_entry_first_refresh()
+
     # ── IMAP fetcher ─────────────────────────────────────────────────────────
     imap_fetcher = None
     imap_disabled = entry.options.get(CONF_IMAP_DISABLED, False)
@@ -282,6 +341,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         "imap_fetcher": imap_fetcher,
         "observer": observer,
         "ack_store": ack_store,
+        "obd_coordinator": obd_coordinator,
+        "obd_observer": obd_observer,
     }
 
     # If the entry was created before we had a real VIN (folder was empty),
@@ -498,6 +559,12 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         observer.stop()
         await hass.async_add_executor_job(observer.join)
         _LOGGER.debug("MyOpel: watchdog fermato")
+
+    obd_observer = entry_data.get("obd_observer")
+    if obd_observer and obd_observer.is_alive():
+        obd_observer.stop()
+        await hass.async_add_executor_job(obd_observer.join)
+        _LOGGER.debug("MyOpel OBD: watchdog fermato")
 
     unload_ok = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
     if unload_ok:

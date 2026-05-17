@@ -57,7 +57,6 @@ _PID_MAP: dict[str, tuple[str, str]] = {
     # ── DPF / emissions ──────────────────────────────────────────────────────
     "obd_trip_dpf_soot_pct":          ("[ECM] Soot clogging level of diesel particulate filter",          "last"),
     "obd_trip_dpf_regen_active":      ("[ECM] DPF regeneration status",                                   "max"),
-    "obd_trip_dpf_since_regen_km":    ("[ECM] Distance traveled since the last regeneration",             "last"),
     "obd_trip_dpf_regen_capability":  ("[ECM] Long-term regeneration capability",                         "last"),
     "obd_trip_adblue_vol_l":          ("[ECM] Volume of urea solution measured in urea tank",             "last"),
     "obd_trip_exhaust_after_cat_c":   ("[ECM] Exhaust gas temperature after pre-catalytic converter",     "max"),
@@ -285,6 +284,7 @@ def _compute_stats(
 
     # ── Curated sensor values ────────────────────────────────────────────────
     _FUEL_MAX = 200.0
+    _SOOT_MAX = 150.0
     for key, (pid_name, agg) in _PID_MAP.items():
         vals = _vals(pid_name)
         if not vals:
@@ -292,6 +292,11 @@ def _compute_stats(
             continue
         if key == "obd_trip_avg_fuel_lph":
             vals = [v for v in vals if v < _FUEL_MAX]
+            if not vals:
+                result[key] = None
+                continue
+        if key == "obd_trip_dpf_soot_pct":
+            vals = [v for v in vals if v <= _SOOT_MAX]
             if not vals:
                 result[key] = None
                 continue
@@ -306,13 +311,23 @@ def _compute_stats(
     pid_catalog: dict[str, dict[str, Any]] = {}
     extra: dict[str, dict[str, Any]] = {}
     for pid_name, recs in pids.items():
-        vals = [v for s, v in recs if t_start <= s <= (t_end or s)]
+        window_recs = [(s, v) for s, v in recs if t_start <= s <= (t_end or s)]
+        vals = [v for _, v in window_recs]
         if not vals:
             continue
         slug = _slugify_pid(pid_name)
         unit = units.get(pid_name)
         kind = _classify_pid(vals, unit)
         mode_val = _mode(vals)
+
+        times = [s for s, _ in window_recs]
+        t_first = times[0]
+        t_last = times[-1]
+        covered_span = t_last - t_first
+        age_from_end = (t_end or t_start) - t_last
+        cov_pct = round(covered_span / max(duration_s, 1.0) * 100.0, 1) if duration_s > 0 else 0.0
+        rate_hz = round(len(vals) / max(covered_span, 1.0), 3)
+
         pid_catalog[slug] = {"name": pid_name, "unit": unit, "kind": kind}
         extra[slug] = {
             "last": round(vals[-1], 3),
@@ -323,6 +338,12 @@ def _compute_stats(
             "mode": mode_val,
             "samples": len(vals),
             "kind": kind,
+            "first_seen_s": round(t_first - t_start, 1),
+            "last_seen_s": round(t_last - t_start, 1),
+            "age_from_trip_end_s": round(age_from_end, 1),
+            "coverage_pct": cov_pct,
+            "sample_rate_hz": rate_hz,
+            "is_stale": age_from_end > 60.0,
         }
     result["obd_pid_values"] = extra
     result["_pid_catalog"] = pid_catalog

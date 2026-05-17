@@ -597,15 +597,6 @@ OBD_SENSOR_DESCRIPTIONS: tuple[MyOpelSensorDescription, ...] = (
         icon="mdi:fire",
     ),
     MyOpelSensorDescription(
-        key="obd_trip_dpf_since_regen_km",
-        data_key="obd_trip_dpf_since_regen_km",
-        name="OBD – Km dall'ultima rigenerazione DPF",
-        native_unit_of_measurement=UnitOfLength.KILOMETERS,
-        device_class=SensorDeviceClass.DISTANCE,
-        state_class=SensorStateClass.MEASUREMENT,
-        icon="mdi:air-filter",
-    ),
-    MyOpelSensorDescription(
         key="obd_trip_dpf_regen_capability",
         data_key="obd_trip_dpf_regen_capability",
         name="OBD – Capacità rigenerazione DPF",
@@ -1006,5 +997,11 @@ class MyOpelObdExtraPidSensor(CoordinatorEntity[MyOpelObdCoordinator], SensorEnt
             "mean": stats.get("mean"),
             "mode": stats.get("mode"),
             "samples": stats.get("samples"),
+            "first_seen_s": stats.get("first_seen_s"),
+            "last_seen_s": stats.get("last_seen_s"),
+            "age_from_trip_end_s": stats.get("age_from_trip_end_s"),
+            "coverage_pct": stats.get("coverage_pct"),
+            "sample_rate_hz": stats.get("sample_rate_hz"),
+            "is_stale": stats.get("is_stale"),
             "obd_filename": (self.coordinator.data or {}).get("obd_filename"),
         }

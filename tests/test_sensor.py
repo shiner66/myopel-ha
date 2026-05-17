@@ -269,8 +269,13 @@ class TestObdExtraPidSensor:
     def test_attributes_include_min_max_mean(self):
         sensor = self._make_extra({
             "obd_pid_values": {
-                "tensione_del_map": {"last": 2.4, "min": 1.0, "max": 3.0, "mean": 2.0,
-                                     "first": 1.0, "samples": 5}
+                "tensione_del_map": {
+                    "last": 2.4, "min": 1.0, "max": 3.0, "mean": 2.0,
+                    "first": 1.0, "samples": 5,
+                    "first_seen_s": 0.0, "last_seen_s": 50.0,
+                    "age_from_trip_end_s": 150.0, "coverage_pct": 25.0,
+                    "sample_rate_hz": 0.04, "is_stale": True,
+                }
             }
         })
         attrs = sensor.extra_state_attributes
@@ -278,6 +283,9 @@ class TestObdExtraPidSensor:
         assert attrs["max"] == 3.0
         assert attrs["mean"] == 2.0
         assert attrs["pid_name"] == "Tensione del MAP"
+        assert attrs["coverage_pct"] == 25.0
+        assert attrs["is_stale"] is True
+        assert attrs["age_from_trip_end_s"] == 150.0
 
     def test_unavailable_when_slug_missing(self):
         sensor = self._make_extra({"obd_pid_values": {}})

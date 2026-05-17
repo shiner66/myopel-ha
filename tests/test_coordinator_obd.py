@@ -133,6 +133,67 @@ class TestComputeStats:
         result = _compute_stats(pids, {}, path)
         assert result["obd_trip_start"] == "2026-05-17T01:47:21+00:00"
 
+    def test_reliability_attrs_present(self, tmp_path):
+        # A PID sampled at 0s and 50s in a 200s trip.
+        pids = {
+            "Giri motore": [(0.0, 800.0), (100.0, 1500.0), (200.0, 2000.0)],
+            "Slow PID": [(0.0, 1.0), (50.0, 2.0)],
+        }
+        result = _compute_stats(pids, {"Slow PID": "V"}, tmp_path / "x.csv")
+        slug = _slugify_pid("Slow PID")
+        stats = result["obd_pid_values"][slug]
+        assert "first_seen_s" in stats
+        assert "last_seen_s" in stats
+        assert "age_from_trip_end_s" in stats
+        assert "coverage_pct" in stats
+        assert "sample_rate_hz" in stats
+        assert "is_stale" in stats
+
+    def test_stale_pid_flagged(self, tmp_path):
+        # Engine runs 0-200s; Slow PID last seen at 50s → age=150s > 60 → stale.
+        pids = {
+            "Giri motore": [(0.0, 800.0), (100.0, 1500.0), (200.0, 2000.0)],
+            "Slow PID": [(0.0, 1.0), (50.0, 2.0)],
+        }
+        result = _compute_stats(pids, {"Slow PID": "V"}, tmp_path / "x.csv")
+        slug = _slugify_pid("Slow PID")
+        stats = result["obd_pid_values"][slug]
+        assert stats["age_from_trip_end_s"] == 150.0
+        assert stats["is_stale"] is True
+        assert stats["coverage_pct"] == 25.0  # 50s covered / 200s total
+
+    def test_fresh_pid_not_stale(self, tmp_path):
+        # Engine runs 0-200s; Fresh PID last seen at 190s → age=10s ≤ 60 → not stale.
+        pids = {
+            "Giri motore": [(0.0, 800.0), (100.0, 1500.0), (200.0, 2000.0)],
+            "Fresh PID": [(100.0, 5.0), (190.0, 6.0)],
+        }
+        result = _compute_stats(pids, {"Fresh PID": "V"}, tmp_path / "x.csv")
+        slug = _slugify_pid("Fresh PID")
+        stats = result["obd_pid_values"][slug]
+        assert stats["age_from_trip_end_s"] == 10.0
+        assert stats["is_stale"] is False
+
+    def test_soot_outlier_filtered(self, tmp_path):
+        # One valid reading (75%), one outlier (1076%). Only 75% should survive.
+        pids = {
+            "Giri motore": [(0.0, 800.0), (1.0, 1500.0)],
+            "[ECM] Soot clogging level of diesel particulate filter": [
+                (0.0, 75.0), (1.0, 1076.27),
+            ],
+        }
+        result = _compute_stats(pids, {}, tmp_path / "x.csv")
+        assert result["obd_trip_dpf_soot_pct"] == 75.0
+
+    def test_dpf_since_regen_not_in_preset(self, tmp_path):
+        # Broken PID was removed from the curated preset — its key must be absent.
+        pids = {
+            "Giri motore": [(0.0, 800.0)],
+            "[ECM] Distance traveled since the last regeneration": [(0.0, 9999.0)],
+        }
+        result = _compute_stats(pids, {}, tmp_path / "x.csv")
+        assert "obd_trip_dpf_since_regen_km" not in result
+
 
 # ── End-to-end parse + persistence ───────────────────────────────────────────
 

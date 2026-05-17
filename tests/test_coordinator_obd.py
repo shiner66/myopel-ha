@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import sys
 from pathlib import Path
 from unittest.mock import MagicMock
 
@@ -9,6 +10,7 @@ import pytest
 
 from custom_components.myopel.coordinator_obd import (
     MyOpelObdCoordinator,
+    _LTS_META,
     _compute_stats,
     _parse_csv_file,
     _slugify_pid,
@@ -313,3 +315,120 @@ def _run_in_thread(func, *args):
     except Exception as exc:
         fut.set_exception(exc)
     return fut
+
+
+# ── LTS injection ─────────────────────────────────────────────────────────────
+
+class TestLtsInjection:
+    def _make_coord(self, tmp_path, entry_id="lts_test"):
+        hass = MagicMock()
+        hass.async_add_executor_job = lambda func, *a: _run_in_thread(func, *a)
+        return MyOpelObdCoordinator(
+            hass, str(tmp_path), scan_interval=60, entry_id=entry_id,
+            delete_after_parse=False,
+        )
+
+    def test_lts_called_once_per_numeric_sensor(self, tmp_path):
+        _write_csv(tmp_path, "a-20260101_120000.csv", [
+            (0.0, "Giri motore", 800.0, "rpm"),
+            (1.0, "Giri motore", 1500.0, "rpm"),
+            (2.0, "Giri motore", 2000.0, "rpm"),
+        ])
+        inject_mock = sys.modules[
+            "homeassistant.components.recorder.statistics"
+        ].async_add_external_statistics
+        inject_mock.reset_mock()
+
+        coord = self._make_coord(tmp_path)
+        loop = asyncio.new_event_loop()
+        try:
+            loop.run_until_complete(coord.async_load_persisted())
+            loop.run_until_complete(coord._async_update_data())
+        finally:
+            loop.close()
+
+        # async_add_external_statistics must have been called at least once
+        # (for obd_trip_avg_rpm and obd_trip_max_rpm which both map to "Giri motore")
+        assert inject_mock.call_count >= 2
+
+    def test_lts_stat_id_format(self, tmp_path):
+        _write_csv(tmp_path, "b-20260101_120000.csv", [
+            (0.0, "Giri motore", 1000.0, "rpm"),
+            (1.0, "Giri motore", 2000.0, "rpm"),
+        ])
+        inject_mock = sys.modules[
+            "homeassistant.components.recorder.statistics"
+        ].async_add_external_statistics
+        inject_mock.reset_mock()
+
+        coord = self._make_coord(tmp_path, entry_id="ent42")
+        loop = asyncio.new_event_loop()
+        try:
+            loop.run_until_complete(coord.async_load_persisted())
+            loop.run_until_complete(coord._async_update_data())
+        finally:
+            loop.close()
+
+        # Every stat_id must be "myopel:{entry_id}_{sensor_key}"
+        calls = inject_mock.call_args_list
+        stat_ids = {call.args[1].statistic_id for call in calls}
+        assert all(sid.startswith("myopel:ent42_obd_trip_") for sid in stat_ids)
+
+    def test_lts_skips_boolean_sensors(self, tmp_path):
+        """obd_trip_dpf_regen_active and obd_trip_ss_switch must never get LTS."""
+        assert "obd_trip_dpf_regen_active" not in _LTS_META
+        assert "obd_trip_ss_switch" not in _LTS_META
+
+    def test_lts_skips_odometer(self, tmp_path):
+        """Odometer is TOTAL_INCREASING and is excluded from LTS."""
+        assert "obd_trip_odometer_km" not in _LTS_META
+
+    def test_lts_uses_pid_stats_for_min_max(self, tmp_path):
+        """StatisticData.min/max come from the raw PID values, not just the scalar."""
+        _write_csv(tmp_path, "c-20260101_120000.csv", [
+            (0.0, "Giri motore", 800.0, "rpm"),
+            (1.0, "Giri motore", 4000.0, "rpm"),
+            (2.0, "Giri motore", 2000.0, "rpm"),
+        ])
+        inject_mock = sys.modules[
+            "homeassistant.components.recorder.statistics"
+        ].async_add_external_statistics
+        inject_mock.reset_mock()
+
+        coord = self._make_coord(tmp_path, entry_id="rpm_test")
+        loop = asyncio.new_event_loop()
+        try:
+            loop.run_until_complete(coord.async_load_persisted())
+            loop.run_until_complete(coord._async_update_data())
+        finally:
+            loop.close()
+
+        calls = inject_mock.call_args_list
+        avg_rpm_call = next(
+            (c for c in calls if "avg_rpm" in c.args[1].statistic_id), None
+        )
+        assert avg_rpm_call is not None
+        stat_data = avg_rpm_call.args[2][0]
+        assert stat_data.min == 800.0
+        assert stat_data.max == 4000.0
+        assert round(stat_data.mean, 1) == round((800 + 4000 + 2000) / 3, 1)
+
+    def test_lts_no_crash_when_obd_trip_start_missing(self, tmp_path):
+        """If the CSV has no datestamp in the filename, LTS injection is silently skipped."""
+        _write_csv(tmp_path, "nodatestamp.csv", [
+            (0.0, "Giri motore", 1000.0, "rpm"),
+        ])
+        inject_mock = sys.modules[
+            "homeassistant.components.recorder.statistics"
+        ].async_add_external_statistics
+        inject_mock.reset_mock()
+
+        coord = self._make_coord(tmp_path, entry_id="nodate_test")
+        loop = asyncio.new_event_loop()
+        try:
+            loop.run_until_complete(coord.async_load_persisted())
+            loop.run_until_complete(coord._async_update_data())
+        finally:
+            loop.close()
+
+        assert inject_mock.call_count == 0

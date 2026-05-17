@@ -71,6 +71,26 @@ _NAME_TO_KEYS: dict[str, list[tuple[str, str]]] = {}
 for _k, (_n, _a) in _PID_MAP.items():
     _NAME_TO_KEYS.setdefault(_n, []).append((_k, _a))
 
+# LTS metadata for curated sensors: key → (display name, unit).
+# Keys absent from this dict are skipped (boolean labels, odometer).
+_LTS_META: dict[str, tuple[str, str | None]] = {
+    "obd_trip_distance_km":          ("OBD – Distanza viaggio",           "km"),
+    "obd_trip_avg_speed_kmh":        ("OBD – Velocità media GPS",         "km/h"),
+    "obd_trip_max_speed_kmh":        ("OBD – Velocità massima GPS",       "km/h"),
+    "obd_trip_avg_rpm":              ("OBD – Giri motore medi",           "rpm"),
+    "obd_trip_max_rpm":              ("OBD – Giri motore massimi",        "rpm"),
+    "obd_trip_coolant_temp_max_c":   ("OBD – Temp. raffreddamento max",   "°C"),
+    "obd_trip_oil_temp_max_c":       ("OBD – Temperatura olio max",       "°C"),
+    "obd_trip_avg_fuel_lph":         ("OBD – Consumo carburante medio",   "L/h"),
+    "obd_trip_air_temp_c":           ("OBD – Temperatura aria esterna",   "°C"),
+    "obd_trip_dpf_soot_pct":         ("OBD – DPF intasamento",            "%"),
+    "obd_trip_dpf_regen_capability": ("OBD – Capacità rigenerazione DPF", "%"),
+    "obd_trip_adblue_vol_l":         ("OBD – AdBlue nel serbatoio",       "L"),
+    "obd_trip_exhaust_after_cat_c":  ("OBD – Temp. gas scarico max",      "°C"),
+    "obd_trip_battery_startup_v":    ("OBD – Tensione avviamento batteria","V"),
+    "obd_trip_oil_dilution_pct":     ("OBD – Diluizione olio",            "%"),
+}
+
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -152,6 +172,52 @@ class MyOpelObdCoordinator(DataUpdateCoordinator):
             "pids": self._discovered_pids,
         })
 
+    async def _async_inject_trip_statistics(self, trip_data: dict[str, Any]) -> None:
+        """Inject one LTS data point per curated numeric sensor for the parsed trip."""
+        from homeassistant.components.recorder.models import StatisticData, StatisticMetaData
+        from homeassistant.components.recorder.statistics import async_add_external_statistics
+
+        ts_str = trip_data.get("obd_trip_start")
+        if not ts_str:
+            return
+        try:
+            t_bucket = datetime.fromisoformat(ts_str).replace(
+                minute=0, second=0, microsecond=0
+            )
+        except ValueError:
+            return
+
+        pid_values = trip_data.get("obd_pid_values") or {}
+
+        for sensor_key, (lts_name, lts_unit) in _LTS_META.items():
+            value = trip_data.get(sensor_key)
+            if value is None:
+                continue
+            # Use per-PID min/max/mean from generic stats when available;
+            # fall back to the curated aggregated scalar otherwise.
+            pid_name = _PID_MAP[sensor_key][0]
+            slug = _slugify_pid(pid_name)
+            pid_stats = pid_values.get(slug) or {}
+            v = float(value)
+            mean = pid_stats.get("mean", v)
+            min_val = pid_stats.get("min", v)
+            max_val = pid_stats.get("max", v)
+
+            stat_id = f"{DOMAIN}:{self.entry_id}_{sensor_key}"
+            metadata = StatisticMetaData(
+                has_mean=True,
+                has_sum=False,
+                name=lts_name,
+                source=DOMAIN,
+                statistic_id=stat_id,
+                unit_of_measurement=lts_unit,
+            )
+            async_add_external_statistics(
+                self.hass,
+                metadata,
+                [StatisticData(start=t_bucket, mean=mean, min=min_val, max=max_val)],
+            )
+
     async def _async_update_data(self) -> dict[str, Any]:
         try:
             parsed = await self.hass.async_add_executor_job(self._parse_pending_csvs)
@@ -164,7 +230,8 @@ class MyOpelObdCoordinator(DataUpdateCoordinator):
         if not parsed:
             return self._latest
 
-        # Update history + latest + pid catalog
+        # Update history + latest + pid catalog; inject LTS while obd_pid_values
+        # is still present (before the catalog pop strips the per-trip dicts).
         for trip in parsed:
             self._history.append(trip)
             for slug, meta in (trip.get("_pid_catalog") or {}).items():
@@ -180,6 +247,13 @@ class MyOpelObdCoordinator(DataUpdateCoordinator):
                         "unit": prev.get("unit") if prev and prev.get("unit") else meta.get("unit"),
                         "kind": kind,
                     }
+            try:
+                await self._async_inject_trip_statistics(trip)
+            except Exception as exc:  # noqa: BLE001
+                _LOGGER.warning(
+                    "MyOpel OBD: LTS injection failed for %s: %s",
+                    trip.get("obd_filename"), exc,
+                )
         # Drop the catalog from per-trip dicts before persisting (lives at top level)
         for trip in parsed:
             trip.pop("_pid_catalog", None)

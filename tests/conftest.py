@@ -166,6 +166,27 @@ class SelectSelector:
 
 # ── Other stubs ───────────────────────────────────────────────────────────────
 
+@dataclass
+class StatisticData:
+    start: Any
+    mean: float | None = None
+    min: float | None = None
+    max: float | None = None
+    sum: float | None = None
+    state: float | None = None
+    last_reset: Any = None
+
+
+@dataclass
+class StatisticMetaData:
+    has_mean: bool = False
+    has_sum: bool = False
+    name: str = ""
+    source: str = ""
+    statistic_id: str = ""
+    unit_of_measurement: str | None = None
+
+
 class Store:
     """In-memory stand-in for homeassistant.helpers.storage.Store."""
 
@@ -256,6 +277,14 @@ _STUBS: dict[str, Any] = {
         "CoordinatorEntity": CoordinatorEntity,
         "DataUpdateCoordinator": DataUpdateCoordinator,
         "UpdateFailed": UpdateFailed,
+    }),
+    "homeassistant.components.recorder": MagicMock(),
+    "homeassistant.components.recorder.models": _make({
+        "StatisticData": StatisticData,
+        "StatisticMetaData": StatisticMetaData,
+    }),
+    "homeassistant.components.recorder.statistics": _make({
+        "async_add_external_statistics": MagicMock(),
     }),
     "watchdog": MagicMock(),
     "watchdog.events": MagicMock(),

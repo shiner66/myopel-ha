@@ -31,7 +31,15 @@ DEFAULT_MIN_TRIP_DISTANCE = 1.0  # km
 # OBD / CarScanner CSV source
 CONF_OBD_FOLDER = "obd_folder"
 CONF_OBD_DISABLED = "obd_disabled"
+CONF_OBD_DELETE_AFTER_PARSE = "obd_delete_after_parse"
+CONF_OBD_ENABLED_PIDS = "obd_enabled_pids"
 DEFAULT_OBD_FOLDER = "/config/myopel_obd/"
+DEFAULT_OBD_DELETE_AFTER_PARSE = True
+
+# OBD trip-data persistence
+OBD_STORAGE_VERSION = 1
+OBD_STORAGE_KEY_TPL = f"{DOMAIN}.{{entry_id}}.obd"
+OBD_HISTORY_MAX_TRIPS = 50
 
 # Timestamp UTC offset correction
 # Stellantis marks timestamps as "Z" (UTC) but the values are always in the

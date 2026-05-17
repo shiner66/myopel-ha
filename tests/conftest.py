@@ -146,6 +146,24 @@ class NumberSelector:
         self.config = config
 
 
+class SelectSelectorMode(str, Enum):
+    LIST = "list"
+    DROPDOWN = "dropdown"
+
+
+@dataclass
+class SelectSelectorConfig:
+    options: list = field(default_factory=list)
+    multiple: bool = False
+    mode: SelectSelectorMode = SelectSelectorMode.DROPDOWN
+    custom_value: bool = False
+
+
+class SelectSelector:
+    def __init__(self, config: SelectSelectorConfig | None = None) -> None:
+        self.config = config
+
+
 # ── Other stubs ───────────────────────────────────────────────────────────────
 
 class Store:
@@ -229,6 +247,9 @@ _STUBS: dict[str, Any] = {
         "NumberSelector": NumberSelector,
         "NumberSelectorConfig": NumberSelectorConfig,
         "NumberSelectorMode": NumberSelectorMode,
+        "SelectSelector": SelectSelector,
+        "SelectSelectorConfig": SelectSelectorConfig,
+        "SelectSelectorMode": SelectSelectorMode,
     }),
     "homeassistant.helpers.storage": _make({"Store": Store}),
     "homeassistant.helpers.update_coordinator": _make({

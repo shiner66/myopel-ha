@@ -28,7 +28,7 @@ from homeassistant.helpers.entity import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
-from .const import DOMAIN
+from .const import CONF_OBD_ENABLED_PIDS, DOMAIN
 from . import MyOpelCoordinator
 from .coordinator_obd import MyOpelObdCoordinator
 
@@ -645,7 +645,6 @@ OBD_SENSOR_DESCRIPTIONS: tuple[MyOpelSensorDescription, ...] = (
         key="obd_trip_ss_switch",
         data_key="obd_trip_ss_switch",
         name="OBD – Start & Stop abilitato",
-        state_class=SensorStateClass.MEASUREMENT,
         icon="mdi:engine-off",
     ),
     MyOpelSensorDescription(
@@ -682,6 +681,15 @@ async def async_setup_entry(
             MyOpelObdSensor(obd_coordinator, description, vin, entry)
             for description in OBD_SENSOR_DESCRIPTIONS
         )
+        enabled_pids = entry.options.get(CONF_OBD_ENABLED_PIDS, []) or []
+        catalog = obd_coordinator.discovered_pids
+        for slug in enabled_pids:
+            meta = catalog.get(slug)
+            if meta is None:
+                continue
+            entities.append(
+                MyOpelObdExtraPidSensor(obd_coordinator, slug, meta, vin, entry)
+            )
 
     async_add_entities(entities)
 
@@ -893,11 +901,82 @@ class MyOpelObdSensor(CoordinatorEntity[MyOpelObdCoordinator], SensorEntity):
                 return datetime.fromisoformat(value.rstrip("Z")).replace(tzinfo=timezone.utc)
             except (ValueError, AttributeError):
                 return None
+        # The CarScanner "Stop and Start switch" PID is inverted: raw 0 means
+        # the system is enabled and operational, raw 1 means the driver has
+        # disabled it. Expose a human-readable label instead of the raw flag.
+        if self.entity_description.data_key == "obd_trip_ss_switch":
+            if value is None:
+                return None
+            try:
+                return "Attivo" if int(value) == 0 else "Disattivato"
+            except (TypeError, ValueError):
+                return None
         return value
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
         return {
             "vin": self._vin,
+            "obd_filename": (self.coordinator.data or {}).get("obd_filename"),
+        }
+
+
+class MyOpelObdExtraPidSensor(CoordinatorEntity[MyOpelObdCoordinator], SensorEntity):
+    """Generic sensor for an arbitrary OBD PID enabled from the options flow."""
+
+    _attr_has_entity_name = True
+
+    def __init__(
+        self,
+        coordinator: MyOpelObdCoordinator,
+        slug: str,
+        meta: dict[str, Any],
+        vin: str,
+        entry: ConfigEntry,
+    ) -> None:
+        super().__init__(coordinator)
+        self._slug = slug
+        self._vin = vin
+        self._entry = entry
+        self._name = meta.get("name", slug)
+        self._attr_name = f"OBD – {self._name}"
+        self._attr_unique_id = f"{entry.entry_id}_obd_pid_{slug}"
+        unit = meta.get("unit") or None
+        self._attr_native_unit_of_measurement = unit
+        self._attr_icon = "mdi:gauge"
+        self._attr_device_info = DeviceInfo(
+            identifiers={(DOMAIN, vin)},
+            name=f"Opel ({vin[-6:]})",
+            manufacturer="Opel",
+            model="MyOpel Export",
+            serial_number=vin,
+        )
+
+    def _stats(self) -> dict[str, Any] | None:
+        data = self.coordinator.data or {}
+        pid_values = data.get("obd_pid_values") or {}
+        entry = pid_values.get(self._slug)
+        return entry if isinstance(entry, dict) else None
+
+    @property
+    def available(self) -> bool:
+        return super().available and self._stats() is not None
+
+    @property
+    def native_value(self) -> Any:
+        stats = self._stats()
+        return stats.get("last") if stats else None
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        stats = self._stats() or {}
+        return {
+            "vin": self._vin,
+            "pid_name": self._name,
+            "first": stats.get("first"),
+            "min": stats.get("min"),
+            "max": stats.get("max"),
+            "mean": stats.get("mean"),
+            "samples": stats.get("samples"),
             "obd_filename": (self.coordinator.data or {}).get("obd_filename"),
         }

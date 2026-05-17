@@ -11,7 +11,12 @@ from custom_components.myopel.const import (
     CONF_TIME_OFFSET,
     DEFAULT_TIME_OFFSET,
 )
-from custom_components.myopel.sensor import MyOpelSensor, MyOpelSensorDescription
+from custom_components.myopel.sensor import (
+    MyOpelObdExtraPidSensor,
+    MyOpelObdSensor,
+    MyOpelSensor,
+    MyOpelSensorDescription,
+)
 from tests.conftest import (
     ConfigEntry,
     CoordinatorEntity,
@@ -189,3 +194,67 @@ class TestSensorMetadata:
         """Sensor is available when coordinator.data is non-empty."""
         sensor = _make_sensor({"mileage_km": 100})
         assert sensor.available is True
+
+
+# ── OBD Start & Stop inversion ────────────────────────────────────────────────
+
+class TestObdStopAndStart:
+    """Raw value 0 = system enabled; raw 1 = driver disabled it."""
+
+    def _make_ss_sensor(self, raw_value):
+        coord = DataUpdateCoordinator()
+        coord.data = {"obd_trip_ss_switch": raw_value}
+        entry = ConfigEntry()
+        desc = MyOpelSensorDescription(
+            key="obd_trip_ss_switch",
+            data_key="obd_trip_ss_switch",
+            name="OBD – Start & Stop",
+        )
+        return MyOpelObdSensor(coord, desc, "TESTVIN", entry)
+
+    def test_zero_means_active(self):
+        assert self._make_ss_sensor(0).native_value == "Attivo"
+
+    def test_one_means_disabled(self):
+        assert self._make_ss_sensor(1).native_value == "Disattivato"
+
+    def test_none_passes_through(self):
+        assert self._make_ss_sensor(None).native_value is None
+
+
+# ── OBD extra PID sensor ──────────────────────────────────────────────────────
+
+class TestObdExtraPidSensor:
+    def _make_extra(self, data):
+        coord = DataUpdateCoordinator()
+        coord.data = data
+        entry = ConfigEntry()
+        meta = {"name": "Tensione del MAP", "unit": "V"}
+        return MyOpelObdExtraPidSensor(coord, "tensione_del_map", meta, "VIN12345", entry)
+
+    def test_native_value_uses_last(self):
+        sensor = self._make_extra({
+            "obd_pid_values": {
+                "tensione_del_map": {"last": 2.4, "min": 1.0, "max": 3.0, "mean": 2.0,
+                                     "first": 1.0, "samples": 5}
+            }
+        })
+        assert sensor.native_value == 2.4
+
+    def test_attributes_include_min_max_mean(self):
+        sensor = self._make_extra({
+            "obd_pid_values": {
+                "tensione_del_map": {"last": 2.4, "min": 1.0, "max": 3.0, "mean": 2.0,
+                                     "first": 1.0, "samples": 5}
+            }
+        })
+        attrs = sensor.extra_state_attributes
+        assert attrs["min"] == 1.0
+        assert attrs["max"] == 3.0
+        assert attrs["mean"] == 2.0
+        assert attrs["pid_name"] == "Tensione del MAP"
+
+    def test_unavailable_when_slug_missing(self):
+        sensor = self._make_extra({"obd_pid_values": {}})
+        assert sensor.native_value is None
+        assert sensor.available is False

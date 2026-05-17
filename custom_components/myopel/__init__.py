@@ -35,7 +35,8 @@ from .const import (
     CONF_MIN_TRIP_DISTANCE, CONF_MIN_TRIP_DISTANCE_ENABLED, DEFAULT_MIN_TRIP_DISTANCE,
 )
 from .const import (
-    CONF_OBD_FOLDER, CONF_OBD_DISABLED, DEFAULT_OBD_FOLDER,
+    CONF_OBD_DELETE_AFTER_PARSE, CONF_OBD_DISABLED, CONF_OBD_FOLDER,
+    DEFAULT_OBD_DELETE_AFTER_PARSE, DEFAULT_OBD_FOLDER,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -246,7 +247,17 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     if not obd_disabled and obd_folder:
         from .coordinator_obd import MyOpelObdCoordinator
 
-        obd_coordinator = MyOpelObdCoordinator(hass, obd_folder, scan_interval)
+        obd_delete_after = entry.options.get(
+            CONF_OBD_DELETE_AFTER_PARSE, DEFAULT_OBD_DELETE_AFTER_PARSE
+        )
+        obd_coordinator = MyOpelObdCoordinator(
+            hass,
+            obd_folder,
+            scan_interval,
+            entry_id=entry.entry_id,
+            delete_after_parse=obd_delete_after,
+        )
+        await obd_coordinator.async_load_persisted()
 
         try:
             from watchdog.observers import Observer

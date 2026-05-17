@@ -26,13 +26,16 @@ from .const import (
     CONF_MIN_TRIP_DISTANCE,
     CONF_MIN_TRIP_DISTANCE_ENABLED,
     CONF_SCAN_INTERVAL,
+    CONF_OBD_DELETE_AFTER_PARSE,
     CONF_OBD_DISABLED,
+    CONF_OBD_ENABLED_PIDS,
     CONF_OBD_FOLDER,
     CONF_TIME_OFFSET,
     DEFAULT_IMAP_FOLDER,
     DEFAULT_IMAP_INTERVAL,
     DEFAULT_IMAP_PORT,
     DEFAULT_MIN_TRIP_DISTANCE,
+    DEFAULT_OBD_DELETE_AFTER_PARSE,
     DEFAULT_OBD_FOLDER,
     DEFAULT_SCAN_INTERVAL,
     DEFAULT_TIME_OFFSET,
@@ -209,6 +212,17 @@ class MyOpelConfigFlow(ConfigFlow, domain=DOMAIN):
 class MyOpelOptionsFlow(OptionsFlow):
     """Options: folder path, polling interval, IMAP settings."""
 
+    def _obd_pid_options(self) -> list[dict[str, str]]:
+        """Return discovered OBD PIDs as a list of SelectOptionDict-like dicts."""
+        entry_data = self.hass.data.get(DOMAIN, {}).get(self.config_entry.entry_id, {})
+        coord = entry_data.get("obd_coordinator")
+        catalog = coord.discovered_pids if coord is not None else {}
+        items = sorted(catalog.items(), key=lambda kv: kv[1].get("name", kv[0]).lower())
+        return [
+            {"value": slug, "label": meta.get("name", slug)}
+            for slug, meta in items
+        ]
+
     async def async_step_init(
         self, user_input: dict[str, Any] | None = None
     ) -> FlowResult:
@@ -291,6 +305,21 @@ class MyOpelOptionsFlow(OptionsFlow):
                     CONF_OBD_FOLDER,
                     default=o.get(CONF_OBD_FOLDER, d.get(CONF_OBD_FOLDER, DEFAULT_OBD_FOLDER)),
                 ): str,
+                vol.Optional(
+                    CONF_OBD_DELETE_AFTER_PARSE,
+                    default=o.get(CONF_OBD_DELETE_AFTER_PARSE, DEFAULT_OBD_DELETE_AFTER_PARSE),
+                ): bool,
+                vol.Optional(
+                    CONF_OBD_ENABLED_PIDS,
+                    default=o.get(CONF_OBD_ENABLED_PIDS, []),
+                ): selector.SelectSelector(
+                    selector.SelectSelectorConfig(
+                        options=self._obd_pid_options(),
+                        multiple=True,
+                        mode=selector.SelectSelectorMode.DROPDOWN,
+                        custom_value=False,
+                    )
+                ),
                 vol.Optional(
                     CONF_IMAP_DISABLED,
                     default=o.get(CONF_IMAP_DISABLED, False),

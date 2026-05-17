@@ -953,10 +953,13 @@ class MyOpelObdExtraPidSensor(CoordinatorEntity[MyOpelObdCoordinator], SensorEnt
         self._kind = meta.get("kind", "number")
         self._attr_name = f"OBD – {self._name}"
         self._attr_unique_id = f"{entry.entry_id}_obd_pid_{slug}"
-        # Boolean-like PIDs are rendered as Sì/No labels — no unit, no class.
         unit = meta.get("unit") or None
-        self._attr_native_unit_of_measurement = None if self._kind == "bool" else unit
-        self._attr_icon = "mdi:toggle-switch" if self._kind == "bool" else "mdi:gauge"
+        # Boolean/discrete PIDs have no meaningful HA unit or state class.
+        self._attr_native_unit_of_measurement = None if self._kind in ("bool", "discrete") else unit
+        self._attr_icon = {
+            "bool": "mdi:toggle-switch",
+            "discrete": "mdi:counter",
+        }.get(self._kind, "mdi:gauge")
         self._attr_device_info = DeviceInfo(
             identifiers={(DOMAIN, vin)},
             name=f"Opel ({vin[-6:]})",
@@ -980,10 +983,14 @@ class MyOpelObdExtraPidSensor(CoordinatorEntity[MyOpelObdCoordinator], SensorEnt
         stats = self._stats()
         if not stats:
             return None
-        value = stats.get("last")
         if self._kind == "bool":
-            return _as_label(value, ("No", "Sì"))
-        return value
+            return _as_label(stats.get("last"), ("No", "Sì"))
+        if self._kind == "discrete":
+            # Mode = most frequently occurring value across the trip.
+            # More meaningful than last/max for discrete states (gear, selector…).
+            mode = stats.get("mode")
+            return int(mode) if mode is not None else None
+        return stats.get("last")
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
@@ -991,10 +998,13 @@ class MyOpelObdExtraPidSensor(CoordinatorEntity[MyOpelObdCoordinator], SensorEnt
         return {
             "vin": self._vin,
             "pid_name": self._name,
+            "kind": self._kind,
+            "last": stats.get("last"),
             "first": stats.get("first"),
             "min": stats.get("min"),
             "max": stats.get("max"),
             "mean": stats.get("mean"),
+            "mode": stats.get("mode"),
             "samples": stats.get("samples"),
             "obd_filename": (self.coordinator.data or {}).get("obd_filename"),
         }

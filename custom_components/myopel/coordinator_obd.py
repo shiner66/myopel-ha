@@ -170,11 +170,10 @@ class MyOpelObdCoordinator(DataUpdateCoordinator):
             self._history.append(trip)
             for slug, meta in (trip.get("_pid_catalog") or {}).items():
                 prev = self._discovered_pids.get(slug)
-                # A PID stays "bool" only if every trip we have seen it in
-                # had it boolean-shaped; one numeric sample demotes it.
-                kind = meta.get("kind", "number")
-                if prev is not None and prev.get("kind") == "number":
-                    kind = "number"
+                # Kind demotes toward "number" if ever seen as number.
+                # bool < discrete < number (in terms of promotion).
+                kind = _merge_kind(prev.get("kind") if prev else None,
+                                   meta.get("kind", "number"))
                 if prev is None or (not prev.get("unit") and meta.get("unit")) \
                         or prev.get("kind") != kind:
                     self._discovered_pids[slug] = {
@@ -311,11 +310,9 @@ def _compute_stats(
         if not vals:
             continue
         slug = _slugify_pid(pid_name)
-        # Detect boolean-like PIDs: all observed samples are 0 or 1. A unit of
-        # "%" disqualifies (percentages can legitimately be 0 or 1 sometimes).
         unit = units.get(pid_name)
-        is_bool = unit not in ("%",) and all(v in (0.0, 1.0) for v in vals)
-        kind = "bool" if is_bool else "number"
+        kind = _classify_pid(vals, unit)
+        mode_val = _mode(vals)
         pid_catalog[slug] = {"name": pid_name, "unit": unit, "kind": kind}
         extra[slug] = {
             "last": round(vals[-1], 3),
@@ -323,6 +320,7 @@ def _compute_stats(
             "min": round(min(vals), 3),
             "max": round(max(vals), 3),
             "mean": round(sum(vals) / len(vals), 3),
+            "mode": mode_val,
             "samples": len(vals),
             "kind": kind,
         }
@@ -344,6 +342,41 @@ def _compute_stats(
         result["obd_trip_start"] = None
 
     return result
+
+
+def _mode(vals: list[float]) -> float:
+    """Return the most frequently occurring value. Ties broken by first seen."""
+    counts: dict[float, int] = {}
+    for v in vals:
+        counts[v] = counts.get(v, 0) + 1
+    return max(counts, key=lambda k: counts[k])
+
+
+_KIND_RANK = {"bool": 0, "discrete": 1, "number": 2}
+
+
+def _merge_kind(prev: str | None, new: str) -> str:
+    """Return the higher-rank kind (promotes toward 'number' on any conflict)."""
+    if prev is None:
+        return new
+    return max(prev, new, key=lambda k: _KIND_RANK.get(k, 2))
+
+
+def _classify_pid(vals: list[float], unit: str | None) -> str:
+    """Return the PID kind: 'bool', 'discrete', or 'number'.
+
+    - bool:     all samples are 0 or 1 AND the PID has no physical unit
+    - discrete: all samples are integer-valued AND ≤ 32 distinct values
+                AND the PID has no physical unit (e.g. gear, mode flag)
+    - number:   everything else — any PID with a unit is always number
+    """
+    has_unit = bool(unit)  # any non-empty unit string means physical quantity
+    if not has_unit and all(v in (0.0, 1.0) for v in vals):
+        return "bool"
+    unique = set(vals)
+    if not has_unit and all(v == int(v) for v in unique) and len(unique) <= 32:
+        return "discrete"
+    return "number"
 
 
 def _aggregate(vals: list[float], agg: str) -> float:

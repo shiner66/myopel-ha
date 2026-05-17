@@ -85,17 +85,18 @@ class TestComputeStats:
         assert result["_pid_catalog"][slug]["kind"] == "bool"
         assert result["obd_pid_values"][slug]["kind"] == "bool"
 
-    def test_numeric_pid_not_boolean(self, tmp_path):
+    def test_numeric_pid_with_unit_is_number(self, tmp_path):
+        # A PID with a physical unit is always "number", even if all integer-valued.
         pids = {
             "Giri motore": [(0.0, 800.0), (1.0, 1500.0), (2.0, 2000.0)],
-            "Temperatura": [(0.0, 0.0), (1.0, 1.0), (2.0, 25.0)],
+            "Temperatura": [(0.0, 20.0), (1.0, 55.0), (2.0, 90.0)],
         }
-        result = _compute_stats(pids, {}, tmp_path / "x.csv")
+        result = _compute_stats(pids, {"Temperatura": "°C"}, tmp_path / "x.csv")
         slug = _slugify_pid("Temperatura")
         assert result["_pid_catalog"][slug]["kind"] == "number"
 
     def test_percentage_unit_never_boolean(self, tmp_path):
-        # A PID measured in % that happens to read 0 or 1 must not be misread as bool
+        # A PID in % must never be bool or discrete regardless of values seen.
         pids = {
             "Giri motore": [(0.0, 800.0), (1.0, 1500.0)],
             "Pedale freno": [(0.0, 0.0), (1.0, 1.0)],
@@ -103,6 +104,27 @@ class TestComputeStats:
         result = _compute_stats(pids, {"Pedale freno": "%"}, tmp_path / "x.csv")
         slug = _slugify_pid("Pedale freno")
         assert result["_pid_catalog"][slug]["kind"] == "number"
+
+    def test_discrete_unitless_integer_pid(self, tmp_path):
+        # Unitless integer-valued PID with ≤ 32 unique values → discrete (e.g. gear)
+        pids = {
+            "Giri motore": [(0.0, 800.0), (1.0, 1500.0), (2.0, 2000.0)],
+            "Engaged gear": [(0.0, 1.0), (1.0, 2.0), (2.0, 3.0)],
+        }
+        result = _compute_stats(pids, {}, tmp_path / "x.csv")
+        slug = _slugify_pid("Engaged gear")
+        assert result["_pid_catalog"][slug]["kind"] == "discrete"
+
+    def test_discrete_mode_used_as_state(self, tmp_path):
+        # Mode (most frequent) is computed and stored for discrete PIDs.
+        pids = {
+            "Giri motore": [(0.0, 800.0), (1.0, 1000.0), (2.0, 900.0), (3.0, 850.0)],
+            "Engaged gear": [(0.0, 3.0), (1.0, 4.0), (2.0, 3.0), (3.0, 3.0)],
+        }
+        result = _compute_stats(pids, {}, tmp_path / "x.csv")
+        slug = _slugify_pid("Engaged gear")
+        # Gear 3 appeared 3 times, gear 4 once → mode = 3
+        assert result["obd_pid_values"][slug]["mode"] == 3.0
 
     def test_filename_timestamp_iso(self, tmp_path):
         pids = {"Giri motore": [(0.0, 800.0)]}

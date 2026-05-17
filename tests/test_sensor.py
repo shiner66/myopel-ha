@@ -222,6 +222,31 @@ class TestObdStopAndStart:
         assert self._make_ss_sensor(None).native_value is None
 
 
+class TestObdDpfRegenActive:
+    """DPF regen status is a 0/1 flag — render as Sì/No, not a float."""
+
+    def _make_regen_sensor(self, raw):
+        coord = DataUpdateCoordinator()
+        coord.data = {"obd_trip_dpf_regen_active": raw}
+        entry = ConfigEntry()
+        desc = MyOpelSensorDescription(
+            key="obd_trip_dpf_regen_active",
+            data_key="obd_trip_dpf_regen_active",
+            name="OBD – DPF rigenerazione attiva",
+        )
+        return MyOpelObdSensor(coord, desc, "VIN", entry)
+
+    def test_zero_renders_no(self):
+        assert self._make_regen_sensor(0).native_value == "No"
+
+    def test_one_renders_si(self):
+        assert self._make_regen_sensor(1).native_value == "Sì"
+
+    def test_float_one_renders_si(self):
+        # _compute_stats stores aggregations as rounded floats (1.0)
+        assert self._make_regen_sensor(1.0).native_value == "Sì"
+
+
 # ── OBD extra PID sensor ──────────────────────────────────────────────────────
 
 class TestObdExtraPidSensor:
@@ -258,3 +283,21 @@ class TestObdExtraPidSensor:
         sensor = self._make_extra({"obd_pid_values": {}})
         assert sensor.native_value is None
         assert sensor.available is False
+
+    def test_boolean_pid_rendered_as_label(self):
+        coord = DataUpdateCoordinator()
+        coord.data = {
+            "obd_pid_values": {
+                "flag_pid": {"last": 1.0, "min": 0.0, "max": 1.0, "mean": 0.5,
+                             "first": 0.0, "samples": 4, "kind": "bool"}
+            }
+        }
+        entry = ConfigEntry()
+        meta = {"name": "Flag PID", "unit": None, "kind": "bool"}
+        sensor = MyOpelObdExtraPidSensor(coord, "flag_pid", meta, "VIN", entry)
+        assert sensor.native_value == "Sì"
+        assert sensor._attr_native_unit_of_measurement is None
+
+        # Same sensor with raw 0 → "No"
+        coord.data["obd_pid_values"]["flag_pid"]["last"] = 0.0
+        assert sensor.native_value == "No"

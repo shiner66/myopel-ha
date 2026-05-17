@@ -169,12 +169,18 @@ class MyOpelObdCoordinator(DataUpdateCoordinator):
         for trip in parsed:
             self._history.append(trip)
             for slug, meta in (trip.get("_pid_catalog") or {}).items():
-                # Keep first non-empty unit we ever saw for a given PID.
                 prev = self._discovered_pids.get(slug)
-                if prev is None or (not prev.get("unit") and meta.get("unit")):
+                # A PID stays "bool" only if every trip we have seen it in
+                # had it boolean-shaped; one numeric sample demotes it.
+                kind = meta.get("kind", "number")
+                if prev is not None and prev.get("kind") == "number":
+                    kind = "number"
+                if prev is None or (not prev.get("unit") and meta.get("unit")) \
+                        or prev.get("kind") != kind:
                     self._discovered_pids[slug] = {
                         "name": meta.get("name", slug),
-                        "unit": meta.get("unit"),
+                        "unit": prev.get("unit") if prev and prev.get("unit") else meta.get("unit"),
+                        "kind": kind,
                     }
         # Drop the catalog from per-trip dicts before persisting (lives at top level)
         for trip in parsed:
@@ -305,7 +311,12 @@ def _compute_stats(
         if not vals:
             continue
         slug = _slugify_pid(pid_name)
-        pid_catalog[slug] = {"name": pid_name, "unit": units.get(pid_name)}
+        # Detect boolean-like PIDs: all observed samples are 0 or 1. A unit of
+        # "%" disqualifies (percentages can legitimately be 0 or 1 sometimes).
+        unit = units.get(pid_name)
+        is_bool = unit not in ("%",) and all(v in (0.0, 1.0) for v in vals)
+        kind = "bool" if is_bool else "number"
+        pid_catalog[slug] = {"name": pid_name, "unit": unit, "kind": kind}
         extra[slug] = {
             "last": round(vals[-1], 3),
             "first": round(vals[0], 3),
@@ -313,6 +324,7 @@ def _compute_stats(
             "max": round(max(vals), 3),
             "mean": round(sum(vals) / len(vals), 3),
             "samples": len(vals),
+            "kind": kind,
         }
     result["obd_pid_values"] = extra
     result["_pid_catalog"] = pid_catalog

@@ -594,7 +594,6 @@ OBD_SENSOR_DESCRIPTIONS: tuple[MyOpelSensorDescription, ...] = (
         key="obd_trip_dpf_regen_active",
         data_key="obd_trip_dpf_regen_active",
         name="OBD – DPF rigenerazione attiva",
-        state_class=SensorStateClass.MEASUREMENT,
         icon="mdi:fire",
     ),
     MyOpelSensorDescription(
@@ -859,6 +858,23 @@ class MyOpelAlertActiveBinarySensor(CoordinatorEntity[MyOpelCoordinator], Binary
         }
 
 
+_OBD_LABELED: dict[str, tuple[str, str]] = {
+    # data_key: (label_when_zero, label_when_nonzero)
+    "obd_trip_ss_switch": ("Attivo", "Disattivato"),
+    "obd_trip_dpf_regen_active": ("No", "Sì"),
+}
+
+
+def _as_label(value: Any, labels: tuple[str, str]) -> str | None:
+    """Render a 0/1-style OBD value as one of two labels."""
+    if value is None:
+        return None
+    try:
+        return labels[0] if int(float(value)) == 0 else labels[1]
+    except (TypeError, ValueError):
+        return None
+
+
 class MyOpelObdSensor(CoordinatorEntity[MyOpelObdCoordinator], SensorEntity):
     """Sensor sourced from a CarScanner OBD CSV export."""
 
@@ -901,16 +917,11 @@ class MyOpelObdSensor(CoordinatorEntity[MyOpelObdCoordinator], SensorEntity):
                 return datetime.fromisoformat(value.rstrip("Z")).replace(tzinfo=timezone.utc)
             except (ValueError, AttributeError):
                 return None
-        # The CarScanner "Stop and Start switch" PID is inverted: raw 0 means
-        # the system is enabled and operational, raw 1 means the driver has
-        # disabled it. Expose a human-readable label instead of the raw flag.
-        if self.entity_description.data_key == "obd_trip_ss_switch":
-            if value is None:
-                return None
-            try:
-                return "Attivo" if int(value) == 0 else "Disattivato"
-            except (TypeError, ValueError):
-                return None
+        # Boolean-like OBD PIDs: expose a label instead of the raw 0/1 float.
+        # Stop&Start switch is inverted (raw 0 = system enabled).
+        labels = _OBD_LABELED.get(self.entity_description.data_key)
+        if labels is not None:
+            return _as_label(value, labels)
         return value
 
     @property
@@ -939,11 +950,13 @@ class MyOpelObdExtraPidSensor(CoordinatorEntity[MyOpelObdCoordinator], SensorEnt
         self._vin = vin
         self._entry = entry
         self._name = meta.get("name", slug)
+        self._kind = meta.get("kind", "number")
         self._attr_name = f"OBD – {self._name}"
         self._attr_unique_id = f"{entry.entry_id}_obd_pid_{slug}"
+        # Boolean-like PIDs are rendered as Sì/No labels — no unit, no class.
         unit = meta.get("unit") or None
-        self._attr_native_unit_of_measurement = unit
-        self._attr_icon = "mdi:gauge"
+        self._attr_native_unit_of_measurement = None if self._kind == "bool" else unit
+        self._attr_icon = "mdi:toggle-switch" if self._kind == "bool" else "mdi:gauge"
         self._attr_device_info = DeviceInfo(
             identifiers={(DOMAIN, vin)},
             name=f"Opel ({vin[-6:]})",
@@ -965,7 +978,12 @@ class MyOpelObdExtraPidSensor(CoordinatorEntity[MyOpelObdCoordinator], SensorEnt
     @property
     def native_value(self) -> Any:
         stats = self._stats()
-        return stats.get("last") if stats else None
+        if not stats:
+            return None
+        value = stats.get("last")
+        if self._kind == "bool":
+            return _as_label(value, ("No", "Sì"))
+        return value
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:

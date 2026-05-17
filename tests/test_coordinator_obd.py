@@ -71,7 +71,38 @@ class TestComputeStats:
         assert extra["last"] == 1.8
         assert extra["samples"] == 3
         catalog = result["_pid_catalog"][slug]
-        assert catalog == {"name": "Tensione del MAP", "unit": "V"}
+        assert catalog["name"] == "Tensione del MAP"
+        assert catalog["unit"] == "V"
+        assert catalog["kind"] == "number"
+
+    def test_boolean_pid_detected(self, tmp_path):
+        pids = {
+            "Giri motore": [(0.0, 800.0), (1.0, 1500.0), (2.0, 2000.0)],
+            "DPF active flag": [(0.0, 0.0), (1.0, 1.0), (2.0, 0.0)],
+        }
+        result = _compute_stats(pids, {}, tmp_path / "x.csv")
+        slug = _slugify_pid("DPF active flag")
+        assert result["_pid_catalog"][slug]["kind"] == "bool"
+        assert result["obd_pid_values"][slug]["kind"] == "bool"
+
+    def test_numeric_pid_not_boolean(self, tmp_path):
+        pids = {
+            "Giri motore": [(0.0, 800.0), (1.0, 1500.0), (2.0, 2000.0)],
+            "Temperatura": [(0.0, 0.0), (1.0, 1.0), (2.0, 25.0)],
+        }
+        result = _compute_stats(pids, {}, tmp_path / "x.csv")
+        slug = _slugify_pid("Temperatura")
+        assert result["_pid_catalog"][slug]["kind"] == "number"
+
+    def test_percentage_unit_never_boolean(self, tmp_path):
+        # A PID measured in % that happens to read 0 or 1 must not be misread as bool
+        pids = {
+            "Giri motore": [(0.0, 800.0), (1.0, 1500.0)],
+            "Pedale freno": [(0.0, 0.0), (1.0, 1.0)],
+        }
+        result = _compute_stats(pids, {"Pedale freno": "%"}, tmp_path / "x.csv")
+        slug = _slugify_pid("Pedale freno")
+        assert result["_pid_catalog"][slug]["kind"] == "number"
 
     def test_filename_timestamp_iso(self, tmp_path):
         pids = {"Giri motore": [(0.0, 800.0)]}

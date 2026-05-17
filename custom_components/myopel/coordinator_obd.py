@@ -20,16 +20,29 @@ _ENGINE_ANCHOR_PIDS = ("Giri motore", "Distanza percorsa:", "Velocità veicolo")
 # Map from coordinator data key → (PID name in CSV, aggregation)
 # aggregations: "last", "max", "min", "mean", "first"
 _PID_MAP: dict[str, tuple[str, str]] = {
-    "obd_trip_distance_km":       ("Distanza percorsa:",                        "last"),
-    "obd_trip_avg_speed_kmh":     ("Velocità (GPS)",                            "mean"),
-    "obd_trip_max_speed_kmh":     ("Velocità (GPS)",                            "max"),
-    "obd_trip_avg_rpm":           ("Giri motore",                               "mean"),
-    "obd_trip_max_rpm":           ("Giri motore",                               "max"),
-    "obd_trip_coolant_temp_max_c":("Temperatura liquido raffreddamento motore", "max"),
-    "obd_trip_oil_temp_max_c":    ("[ECM] Oil temperature",                     "max"),
-    "obd_trip_avg_fuel_lph":      ("Consumo istantaneo di carburante calcolato","mean"),
-    "obd_trip_odometer_km":       ("[ECM] Total mileage",                       "last"),
-    "obd_trip_air_temp_c":        ("Temperatura d'aria ambiente",               "first"),
+    # ── Basic trip ────────────────────────────────────────────────────────────
+    "obd_trip_distance_km":           ("Distanza percorsa:",                                              "last"),
+    "obd_trip_avg_speed_kmh":         ("Velocità (GPS)",                                                  "mean"),
+    "obd_trip_max_speed_kmh":         ("Velocità (GPS)",                                                  "max"),
+    # ── Engine ───────────────────────────────────────────────────────────────
+    "obd_trip_avg_rpm":               ("Giri motore",                                                     "mean"),
+    "obd_trip_max_rpm":               ("Giri motore",                                                     "max"),
+    "obd_trip_coolant_temp_max_c":    ("Temperatura liquido raffreddamento motore",                       "max"),
+    "obd_trip_oil_temp_max_c":        ("[ECM] Oil temperature",                                           "max"),
+    "obd_trip_avg_fuel_lph":          ("Consumo istantaneo di carburante calcolato",                      "mean"),
+    "obd_trip_odometer_km":           ("[ECM] Total mileage",                                             "last"),
+    "obd_trip_air_temp_c":            ("Temperatura d'aria ambiente",                                     "first"),
+    # ── DPF / emissions ──────────────────────────────────────────────────────
+    "obd_trip_dpf_soot_pct":          ("[ECM] Soot clogging level of diesel particulate filter",          "last"),
+    "obd_trip_dpf_regen_active":      ("[ECM] DPF regeneration status",                                   "max"),
+    "obd_trip_dpf_since_regen_km":    ("[ECM] Distance traveled since the last regeneration",             "last"),
+    "obd_trip_dpf_regen_capability":  ("[ECM] Long-term regeneration capability",                         "last"),
+    "obd_trip_adblue_vol_l":          ("[ECM] Volume of urea solution measured in urea tank",             "last"),
+    "obd_trip_exhaust_after_cat_c":   ("[ECM] Exhaust gas temperature after pre-catalytic converter",     "max"),
+    # ── Diagnostics ──────────────────────────────────────────────────────────
+    "obd_trip_battery_startup_v":     ("[ECM] Minimum battery voltage at startup",                        "last"),
+    "obd_trip_ss_switch":             ("[ECM] Stop and Start switch",                                     "last"),
+    "obd_trip_oil_dilution_pct":      ("[ECM] Evaluation of the degree of dilution of motor oil",         "last"),
 }
 
 
@@ -53,6 +66,9 @@ class MyOpelObdCoordinator(DataUpdateCoordinator):
             update_interval=timedelta(seconds=scan_interval),
         )
         self.folder_path = folder_path
+        # (path_str, mtime) of the last successfully parsed file; avoids
+        # re-reading an unchanged CSV on every polling cycle.
+        self._last_parsed: tuple[str, float] | None = None
 
     async def _async_update_data(self) -> dict[str, Any]:
         try:
@@ -72,6 +88,11 @@ class MyOpelObdCoordinator(DataUpdateCoordinator):
             raise _NoObdFileYet
 
         path = csvs[-1]
+        mtime = path.stat().st_mtime
+        if self._last_parsed == (str(path), mtime):
+            _LOGGER.debug("MyOpel OBD: %s invariato, skip rielaborazione", path.name)
+            return self.data or {}
+
         _LOGGER.debug("MyOpel OBD: lettura %s", path.name)
 
         pids: dict[str, list[tuple[float, float, float | None, float | None]]] = {}
@@ -94,7 +115,9 @@ class MyOpelObdCoordinator(DataUpdateCoordinator):
         if not pids:
             raise UpdateFailed("OBD CSV is empty")
 
-        return _compute_stats(pids, path)
+        result = _compute_stats(pids, path)
+        self._last_parsed = (str(path), mtime)
+        return result
 
 
 # ── Stats computation ────────────────────────────────────────────────────────

@@ -198,7 +198,7 @@ class TestSensorMetadata:
 
 
 class TestObdDpfRegenActive:
-    """DPF regen status is a 0/1 flag — render as Sì/No, not a float."""
+    """DPF regen status is a multi-value code — pass the number through unchanged."""
 
     def _make_regen_sensor(self, raw):
         coord = DataUpdateCoordinator()
@@ -211,15 +211,19 @@ class TestObdDpfRegenActive:
         )
         return MyOpelObdSensor(coord, desc, "VIN", entry)
 
-    def test_zero_renders_no(self):
-        assert self._make_regen_sensor(0).native_value == "No"
+    def test_zero_passes_through(self):
+        assert self._make_regen_sensor(0).native_value == 0
 
-    def test_one_renders_si(self):
-        assert self._make_regen_sensor(1).native_value == "Sì"
+    def test_one_passes_through(self):
+        assert self._make_regen_sensor(1).native_value == 1
 
-    def test_float_one_renders_si(self):
-        # _compute_stats stores aggregations as rounded floats (1.0)
-        assert self._make_regen_sensor(1.0).native_value == "Sì"
+    def test_six_passes_through(self):
+        # ECU can report codes like 6 (post-regen / completed state)
+        assert self._make_regen_sensor(6).native_value == 6
+
+    def test_float_passes_through(self):
+        # _compute_stats stores aggregations as floats (e.g. 6.0)
+        assert self._make_regen_sensor(6.0).native_value == 6.0
 
 
 # ── OBD extra PID sensor ──────────────────────────────────────────────────────

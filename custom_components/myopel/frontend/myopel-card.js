@@ -1386,7 +1386,7 @@ class MyOpelCard extends LitElement {
 
       <div class="op-section-label" style="margin-top:14px">🌿 Emissioni & DPF</div>
       ${obdRow("🫧","DPF intasamento",      this._fmt("obd_dpf_intasamento"),             "%", "obd_dpf_intasamento")}
-      ${obdRow("🔥","Rigenerazione attiva", this._state("obd_dpf_rigenerazione_attiva") ?? "—", "", "obd_dpf_rigenerazione_attiva")}
+      ${obdRow("🔥","Stato rigenerazione",   this._fmt("obd_dpf_rigenerazione_attiva","sensor",0), "", "obd_dpf_rigenerazione_attiva")}
       ${obdRow("📉","Cap. rigenerazione",   this._fmt("obd_capacita_rigenerazione_dpf"),  "%", "obd_capacita_rigenerazione_dpf")}
       ${obdRow("💧","AdBlue serbatoio",     this._fmt("obd_adblue_nel_serbatoio"),         "L", "obd_adblue_nel_serbatoio")}
       ${obdRow("🌡️","Gas scarico max",     this._fmt("obd_temp_gas_scarico_max","sensor",0), "°C", "obd_temp_gas_scarico_max")}

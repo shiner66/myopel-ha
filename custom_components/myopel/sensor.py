@@ -853,8 +853,9 @@ class MyOpelAlertActiveBinarySensor(CoordinatorEntity[MyOpelCoordinator], Binary
 
 
 _OBD_LABELED: dict[str, tuple[str, str]] = {
-    # data_key: (label_when_zero, label_when_nonzero)
-    "obd_trip_dpf_regen_active": ("No", "Sì"),
+    # No entries currently — obd_trip_dpf_regen_active is a multi-value
+    # status code (0=off, 1=pre-cond, 2=active, 4=inhibited, 6=post-regen…)
+    # so showing the raw number is more informative than a Sì/No label.
 }
 
 

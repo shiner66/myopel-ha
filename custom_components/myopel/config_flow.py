@@ -30,6 +30,7 @@ from .const import (
     CONF_OBD_DISABLED,
     CONF_OBD_ENABLED_PIDS,
     CONF_OBD_FOLDER,
+    CONF_OBD_RBS_FIX_PIDS,
     CONF_TIME_OFFSET,
     DEFAULT_IMAP_FOLDER,
     DEFAULT_IMAP_INTERVAL,
@@ -223,6 +224,15 @@ class MyOpelOptionsFlow(OptionsFlow):
             for slug, meta in items
         ]
 
+    @staticmethod
+    def _obd_rbs_options() -> list[dict[str, str]]:
+        """Return the static list of RBS-fixable PID names for the multi-select."""
+        from .coordinator_obd import _RBS_FIXES
+        return [
+            {"value": pid_name, "label": pid_name}
+            for pid_name in sorted(_RBS_FIXES.keys())
+        ]
+
     async def async_step_init(
         self, user_input: dict[str, Any] | None = None
     ) -> FlowResult:
@@ -315,6 +325,17 @@ class MyOpelOptionsFlow(OptionsFlow):
                 ): selector.SelectSelector(
                     selector.SelectSelectorConfig(
                         options=self._obd_pid_options(),
+                        multiple=True,
+                        mode=selector.SelectSelectorMode.DROPDOWN,
+                        custom_value=False,
+                    )
+                ),
+                vol.Optional(
+                    CONF_OBD_RBS_FIX_PIDS,
+                    default=o.get(CONF_OBD_RBS_FIX_PIDS, []),
+                ): selector.SelectSelector(
+                    selector.SelectSelectorConfig(
+                        options=self._obd_rbs_options(),
                         multiple=True,
                         mode=selector.SelectSelectorMode.DROPDOWN,
                         custom_value=False,

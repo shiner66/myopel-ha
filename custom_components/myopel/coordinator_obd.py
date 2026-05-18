@@ -91,6 +91,64 @@ _LTS_META: dict[str, tuple[str, str | None]] = {
 }
 
 
+# ── RBS (byte-swap) fixes ─────────────────────────────────────────────────────
+#
+# CarScanner's "MD1CS003" profile for the Peugeot/Citroën 1.5 BlueHDi sets
+# RBS=true on several 2-byte PIDs where the actual ECU stream is big-endian.
+# The result is a CSV value of (B*256+A)*MUL/DIV instead of (A*256+B)*MUL/DIV.
+# Given only the decoded CSV value and the formula constants, we can recover
+# the no-RBS value by: rounding back to the 16-bit raw, swapping bytes, and
+# re-applying the formula.
+#
+# Users opt-in per PID via the options flow. Defaults to empty (= no fixing)
+# so users on other ECUs / profiles are not affected.
+
+_RBS_FIXES: dict[str, dict[str, float]] = {
+    "[ECM] Distance traveled since the last regeneration": {
+        "div": 16.0, "mul": 1.0, "ofs": 0.0,
+    },
+    "[ECM] Set value of turbo boost pressure": {
+        "div": 1.0, "mul": 1.0, "ofs": 0.0,
+    },
+    "[ECM] EGR valve position": {
+        "div": 100.0, "mul": 1.0, "ofs": 0.0,
+    },
+    "[ECM] Air metering valve position": {
+        "div": 100.0, "mul": 1.0, "ofs": 0.0,
+    },
+    "[ECM] NOx content measured at the inlet of the NOx catalytic converter": {
+        "div": 1.0, "mul": 0.1, "ofs": 0.0,
+    },
+    "[ECM] Open-loop soot load": {
+        "div": 1024.0, "mul": 1.0, "ofs": 0.0,
+    },
+    "[ECM] Soot clogging level of diesel particulate filter": {
+        "div": 10.24, "mul": 1.0, "ofs": 0.0,
+    },
+    "[ECM] Average mileage of last 10 regenerations": {
+        "div": 16.0, "mul": 1.0, "ofs": 0.0,
+    },
+}
+
+
+def _rbs_swap_value(value: float, div: float, mul: float, ofs: float) -> float:
+    """Reverse a CarScanner byte-swap mistake on a 2-byte PID.
+
+    Given the (wrong) CSV value `v = (B*256+A) * mul/div + ofs`, recover
+    `(A*256+B) * mul/div + ofs`. Returns the input unchanged if the implied
+    raw value does not fit into a uint16 — defensive no-op for non-2-byte
+    PIDs accidentally enabled.
+    """
+    raw = round((value - ofs) * div / mul)
+    if raw < 0:
+        # CarScanner may have interpreted the 2-byte register as signed int16
+        raw += 0x10000
+    if not 0 <= raw <= 0xFFFF:
+        return value
+    swapped = ((raw & 0xFF) << 8) | ((raw >> 8) & 0xFF)
+    return swapped * mul / div + ofs
+
+
 # ── Helpers ──────────────────────────────────────────────────────────────────
 
 _SLUG_RE = re.compile(r"[^a-z0-9]+")
@@ -120,6 +178,7 @@ class MyOpelObdCoordinator(DataUpdateCoordinator):
         scan_interval: int,
         entry_id: str,
         delete_after_parse: bool = True,
+        rbs_fix_pids: list[str] | None = None,
     ) -> None:
         super().__init__(
             hass,
@@ -133,6 +192,7 @@ class MyOpelObdCoordinator(DataUpdateCoordinator):
         self.folder_path = folder_path
         self.entry_id = entry_id
         self.delete_after_parse = delete_after_parse
+        self.rbs_fix_pids: list[str] = rbs_fix_pids or []
         self._store: Store = Store(
             hass, OBD_STORAGE_VERSION, OBD_STORAGE_KEY_TPL.format(entry_id=entry_id)
         )
@@ -278,7 +338,7 @@ class MyOpelObdCoordinator(DataUpdateCoordinator):
         results: list[dict[str, Any]] = []
         for path in csvs:
             try:
-                result = _parse_csv_file(path)
+                result = _parse_csv_file(path, self.rbs_fix_pids)
             except UpdateFailed:
                 _LOGGER.warning("MyOpel OBD: %s vuoto o malformato, ignoro", path.name)
                 continue
@@ -303,7 +363,16 @@ class MyOpelObdCoordinator(DataUpdateCoordinator):
 
 # ── Parsing primitives (module-level for testability) ────────────────────────
 
-def _parse_csv_file(path: Path) -> dict[str, Any]:
+def _parse_csv_file(
+    path: Path,
+    rbs_fix_pids: list[str] | None = None,
+) -> dict[str, Any]:
+    active_rbs: dict[str, dict[str, float]] = {}
+    if rbs_fix_pids:
+        for pid_name in rbs_fix_pids:
+            if pid_name in _RBS_FIXES:
+                active_rbs[pid_name] = _RBS_FIXES[pid_name]
+
     pids: dict[str, list[tuple[float, float]]] = {}
     units: dict[str, str] = {}
     with open(path, newline="", encoding="utf-8-sig") as fh:
@@ -318,6 +387,9 @@ def _parse_csv_file(path: Path) -> dict[str, Any]:
                 val = float(row[2])
             except (ValueError, IndexError):
                 continue
+            if pid in active_rbs:
+                fix = active_rbs[pid]
+                val = _rbs_swap_value(val, fix["div"], fix["mul"], fix["ofs"])
             pids.setdefault(pid, []).append((sec, val))
             unit = row[3].strip() if len(row) > 3 else ""
             if unit and pid not in units:

@@ -11,8 +11,10 @@ import pytest
 from custom_components.myopel.coordinator_obd import (
     MyOpelObdCoordinator,
     _LTS_META,
+    _RBS_FIXES,
     _compute_stats,
     _parse_csv_file,
+    _rbs_swap_value,
     _slugify_pid,
     _trapezoid_integrate_lph,
 )
@@ -504,3 +506,110 @@ class TestLtsInjection:
             loop.close()
 
         assert inject_mock.call_count == 0
+
+
+# ── RBS byte-swap ─────────────────────────────────────────────────────────────
+
+class TestRbsSwapValue:
+    """Unit tests for the RBS byte-swap recovery function."""
+
+    def test_simple_16bit_swap(self):
+        # Raw = 0x0102 (258 decimal), swapped = 0x0201 (513).
+        # div=1, mul=1, ofs=0: v_rbs = 258.0, corrected = 513.0
+        assert _rbs_swap_value(258.0, div=1.0, mul=1.0, ofs=0.0) == pytest.approx(513.0)
+
+    def test_swap_with_divisor(self):
+        # div=16, mul=1, ofs=0: raw = round(32.0 * 16) = 512 = 0x0200
+        # swapped = 0x0002 = 2.  corrected = 2 / 16 = 0.125
+        assert _rbs_swap_value(32.0, div=16.0, mul=1.0, ofs=0.0) == pytest.approx(0.125)
+
+    def test_swap_with_mul(self):
+        # div=1, mul=0.1, ofs=0: raw = round(25.6 / 0.1) = 256 = 0x0100
+        # swapped = 0x0001 = 1.  corrected = 1 * 0.1 = 0.1
+        assert _rbs_swap_value(25.6, div=1.0, mul=0.1, ofs=0.0) == pytest.approx(0.1)
+
+    def test_identity_when_both_bytes_equal(self):
+        # 0xAAAA byte-swapped is still 0xAAAA — value unchanged
+        raw = 0xAAAA  # 43690
+        v = raw * 1.0  # div=1, mul=1, ofs=0
+        assert _rbs_swap_value(v, div=1.0, mul=1.0, ofs=0.0) == pytest.approx(v)
+
+    def test_out_of_range_returns_unchanged(self):
+        # raw > 0xFFFF → no 2-byte interpretation → return as-is
+        assert _rbs_swap_value(1_000_000.0, div=1.0, mul=1.0, ofs=0.0) == pytest.approx(1_000_000.0)
+
+    def test_signed_negative_raw_handled(self):
+        # If CarScanner interprets the 2-byte register as signed int16,
+        # the decoded value may produce a negative raw.
+        # E.g. raw signed = -1 → uint16 = 0xFFFF = 65535
+        # 0xFFFF byte-swapped = 0xFFFF (same) → still 65535.0
+        v = -1.0  # div=1, mul=1, ofs=0 → raw=−1 → add 0x10000 → 65535
+        assert _rbs_swap_value(v, div=1.0, mul=1.0, ofs=0.0) == pytest.approx(65535.0)
+
+    def test_rbs_fixes_dict_has_known_pids(self):
+        expected = {
+            "[ECM] Distance traveled since the last regeneration",
+            "[ECM] Set value of turbo boost pressure",
+            "[ECM] EGR valve position",
+            "[ECM] Air metering valve position",
+            "[ECM] NOx content measured at the inlet of the NOx catalytic converter",
+            "[ECM] Open-loop soot load",
+            "[ECM] Soot clogging level of diesel particulate filter",
+            "[ECM] Average mileage of last 10 regenerations",
+        }
+        assert set(_RBS_FIXES.keys()) == expected
+
+
+class TestRbsIntegration:
+    """End-to-end: CSV read with RBS correction applied."""
+
+    def test_parse_csv_file_applies_rbs(self, tmp_path):
+        # Write a CSV where EGR valve position is RBS-encoded.
+        # True raw uint16 = 0x4000 = 16384; div=100 → correct value = 163.84
+        # RBS encoding: bytes swapped → raw = 0x0040 = 64; div=100 → CSV value = 0.64
+        pid_name = "[ECM] EGR valve position"
+        path = _write_csv(tmp_path, "x-20260101_120000.csv", [
+            (0.0, "Giri motore", 800.0, "rpm"),
+            (1.0, pid_name, 0.64, "%"),
+        ])
+        result = _parse_csv_file(path, rbs_fix_pids=[pid_name])
+        slug = _slugify_pid(pid_name)
+        corrected = result["obd_pid_values"][slug]["last"]
+        assert corrected == pytest.approx(163.84, rel=1e-4)
+
+    def test_parse_csv_file_no_rbs_unchanged(self, tmp_path):
+        # Same CSV, but RBS fix NOT enabled → value stays at 0.64
+        pid_name = "[ECM] EGR valve position"
+        path = _write_csv(tmp_path, "y-20260101_120000.csv", [
+            (0.0, "Giri motore", 800.0, "rpm"),
+            (1.0, pid_name, 0.64, "%"),
+        ])
+        result = _parse_csv_file(path)
+        slug = _slugify_pid(pid_name)
+        raw_val = result["obd_pid_values"][slug]["last"]
+        assert raw_val == pytest.approx(0.64, rel=1e-4)
+
+    def test_coordinator_passes_rbs_to_parser(self, tmp_path):
+        # Coordinator with rbs_fix_pids set must produce the corrected value.
+        pid_name = "[ECM] EGR valve position"
+        _write_csv(tmp_path, "z-20260101_120000.csv", [
+            (0.0, "Giri motore", 800.0, "rpm"),
+            (1.0, pid_name, 0.64, "%"),
+        ])
+        hass = MagicMock()
+        hass.async_add_executor_job = lambda func, *a: _run_in_thread(func, *a)
+        coord = MyOpelObdCoordinator(
+            hass, str(tmp_path), scan_interval=60, entry_id="rbs_ent",
+            delete_after_parse=False,
+            rbs_fix_pids=[pid_name],
+        )
+        loop = asyncio.new_event_loop()
+        try:
+            loop.run_until_complete(coord.async_load_persisted())
+            data = loop.run_until_complete(coord._async_update_data())
+        finally:
+            loop.close()
+
+        slug = _slugify_pid(pid_name)
+        corrected = data["obd_pid_values"][slug]["last"]
+        assert corrected == pytest.approx(163.84, rel=1e-4)

@@ -36,6 +36,7 @@ from .const import (
 )
 from .const import (
     CONF_OBD_DELETE_AFTER_PARSE, CONF_OBD_DISABLED, CONF_OBD_FOLDER,
+    CONF_OBD_RBS_FIX_PIDS,
     DEFAULT_OBD_DELETE_AFTER_PARSE, DEFAULT_OBD_FOLDER,
 )
 
@@ -250,12 +251,14 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         obd_delete_after = entry.options.get(
             CONF_OBD_DELETE_AFTER_PARSE, DEFAULT_OBD_DELETE_AFTER_PARSE
         )
+        obd_rbs_fix_pids = entry.options.get(CONF_OBD_RBS_FIX_PIDS, [])
         obd_coordinator = MyOpelObdCoordinator(
             hass,
             obd_folder,
             scan_interval,
             entry_id=entry.entry_id,
             delete_after_parse=obd_delete_after,
+            rbs_fix_pids=obd_rbs_fix_pids,
         )
         await obd_coordinator.async_load_persisted()
 

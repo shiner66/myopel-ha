@@ -420,6 +420,44 @@ class MyOpelCard extends LitElement {
       background: rgba(227,0,27,0.15); color: var(--op-red);
       border: 1px solid rgba(227,0,27,0.3);
     }
+
+    /* ── OBD anomaly banner (shown in trip tab) ── */
+    .op-obd-banner {
+      margin: 10px 0 0; border-radius: 10px; padding: 10px 12px;
+      cursor: pointer; transition: border-color 0.2s;
+    }
+    .op-obd-banner-alert {
+      background: rgba(227,0,27,0.07);
+      border: 1px solid rgba(227,0,27,0.28);
+    }
+    .op-obd-banner-warn {
+      background: rgba(245,158,11,0.07);
+      border: 1px solid rgba(245,158,11,0.28);
+    }
+    .op-obd-banner:hover { border-color: rgba(255,255,255,0.2); }
+    .op-obd-banner-header {
+      display: flex; justify-content: space-between; align-items: center;
+      font-size: 12px; font-weight: 700; margin-bottom: 7px; letter-spacing: 0.3px;
+    }
+    .op-obd-banner-alert .op-obd-banner-header { color: #ff7070; }
+    .op-obd-banner-warn  .op-obd-banner-header { color: var(--op-yellow); }
+    .op-obd-banner-hint { font-size: 10px; font-weight: 600; color: var(--op-muted); letter-spacing: 0.5px; }
+    .op-obd-anomaly-item { font-size: 11px; padding: 2px 0; line-height: 1.5; }
+    .op-obd-banner-alert .op-obd-anomaly-item { color: #ff7070; }
+    .op-obd-banner-warn  .op-obd-anomaly-item { color: var(--op-yellow); }
+    .op-obd-anomaly-item strong { font-weight: 700; }
+
+    /* tab badge for anomaly count */
+    .op-tab-badge {
+      display: inline-flex; align-items: center; justify-content: center;
+      background: var(--op-red); color: white;
+      font-size: 9px; font-weight: 900; border-radius: 50%;
+      width: 14px; height: 14px; margin-left: 3px; vertical-align: middle;
+    }
+
+    /* OBD row value level colouring */
+    .op-row-val.warn  { color: var(--op-yellow); }
+    .op-row-val.alert { color: #ff7070; }
   `;
 
   // ── Config ────────────────────────────────────────────────────────────────
@@ -812,6 +850,61 @@ class MyOpelCard extends LitElement {
     `;
   }
 
+  // ── OBD anomaly detection ─────────────────────────────────────────────────
+  //
+  // Soglie basate su buon senso per un diesel 1.5 BlueHDi (Opel/Citroën).
+  // Ogni entry: [suffix, warn_thresh, warn_label, alert_thresh, alert_label, unit, higherIsBad, dec]
+  _obdAnomalies() {
+    const CHECKS = [
+      // DPF: > 75% warn, > 90% alert
+      ["obd_dpf_intasamento",              75,  "DPF quasi saturo",          90,  "DPF intasato",                 "%",   true,  1],
+      // Capacità rigenerazione: < 50% warn, < 20% alert (lower = worse)
+      ["obd_capacita_rigenerazione_dpf",   50,  "Cap. regen. DPF ridotta",   20,  "Cap. regen. DPF critica",      "%",   false, 1],
+      // Raffreddamento max: > 102°C warn, > 110°C alert
+      ["obd_temp_raffreddamento_max",     102,  "Raffreddamento elevato",   110,  "Raffreddamento critico",       "°C",  true,  1],
+      // Olio max: > 130°C warn, > 140°C alert
+      ["obd_temperatura_olio_max",        130,  "Temp. olio elevata",       140,  "Temp. olio critica",           "°C",  true,  1],
+      // Batteria avviamento: < 11.5 V warn, < 10.5 V alert
+      ["obd_tensione_avviamento_batteria", 11.5, "Batteria debole",          10.5, "Batteria critica",             "V",   false, 2],
+      // Diluizione olio: > 3% warn, > 5% alert
+      ["obd_diluizione_olio",               3,  "Diluizione olio elevata",    5,  "Diluizione olio critica",      "%",   true,  1],
+      // Gas scarico pre-cat: > 640°C warn, > 700°C alert (regen può arrivare a 600°C)
+      ["obd_temp_gas_scarico_max",         640,  "Gas scarico elevato",      700,  "Gas scarico critico",          "°C",  true,  0],
+      // AdBlue: < 5 L warn, < 2 L alert
+      ["obd_adblue_nel_serbatoio",           5,  "AdBlue basso",               2,  "AdBlue quasi esaurito",        "L",   false, 1],
+    ];
+    const res = [];
+    for (const [sfx, wt, wl, at, al, unit, hisBad, dec] of CHECKS) {
+      const v = this._num(sfx);
+      if (v === null) continue;
+      let level = null, label = null;
+      if (hisBad) { if (v > at) { level = "alert"; label = al; } else if (v > wt) { level = "warn"; label = wl; } }
+      else        { if (v < at) { level = "alert"; label = al; } else if (v < wt) { level = "warn"; label = wl; } }
+      if (level) res.push({ sfx, level, label, val: v, unit, dec });
+    }
+    return res;
+  }
+
+  _renderObdAnomalyBanner() {
+    const anom = this._obdAnomalies();
+    if (!anom.length) return nothing;
+    const hasAlert = anom.some(a => a.level === "alert");
+    const cls = hasAlert ? "alert" : "warn";
+    return html`
+      <div class="op-obd-banner op-obd-banner-${cls}"
+           @click=${() => { this._tab = "obd"; }}>
+        <div class="op-obd-banner-header">
+          <span>${hasAlert ? "🔴" : "🟡"} Anomalie OBD — ${anom.length}</span>
+          <span class="op-obd-banner-hint">TAB OBD →</span>
+        </div>
+        ${anom.map(a => html`
+          <div class="op-obd-anomaly-item">
+            ${a.label}: <strong>${a.val.toFixed(a.dec)} ${a.unit}</strong>
+          </div>
+        `)}
+      </div>`;
+  }
+
   // ── Render: Hero ──────────────────────────────────────────────────────────
   _renderHero() {
     const fuelPct   = this._num("livello_carburante");
@@ -1052,12 +1145,16 @@ class MyOpelCard extends LitElement {
 
   // ── Render: Tabs ──────────────────────────────────────────────────────────
   _renderTabs() {
+    const obdCount = this._obdAnomalies().length;
     return html`
       <div class="op-tabs">
         ${[["trip","Viaggio"],["month","Mese"],["total","Totali"],["maint","Manutenzione"]]
           .map(([k,l]) => html`
             <div class="op-tab ${this._tab===k?"active":""}" @click=${()=>{this._tab=k;}}>${l}</div>
           `)}
+        <div class="op-tab ${this._tab==='obd'?'active':''}" @click=${()=>{this._tab='obd';}}>
+          OBD${obdCount ? html`<span class="op-tab-badge">${obdCount}</span>` : nothing}
+        </div>
       </div>`;
   }
 
@@ -1099,6 +1196,7 @@ class MyOpelCard extends LitElement {
       ${this._row("🕐","Partenza",            this._fmtDate("ultimo_viaggio_inizio"),"","ultimo_viaggio_inizio")}
       ${this._row("🏁","Arrivo",              this._fmtDate("ultimo_viaggio_fine"),"","ultimo_viaggio_fine")}
       ${this._renderAlertList("last_trip")}
+      ${this._renderObdAnomalyBanner()}
     </div>`;
   }
 
@@ -1235,10 +1333,78 @@ class MyOpelCard extends LitElement {
     </div>`;
   }
 
+  // ── Tab: OBD ──────────────────────────────────────────────────────────────
+  _renderObd() {
+    const anom = this._obdAnomalies();
+    const lvl  = (sfx) => anom.find(a => a.sfx === sfx)?.level ?? null;
+
+    // Row helper with anomaly-level colouring on the value
+    const obdRow = (icon, label, val, unit, sfx) => {
+      const l = lvl(sfx);
+      return html`
+        <div class="op-row" @click=${() => this._open(sfx)}>
+          <div class="op-row-left">
+            <div class="op-row-ico">${icon}</div>
+            <div class="op-row-lbl">${label}</div>
+          </div>
+          <div class="op-row-val${l ? ` ${l}` : ''}">${val}<span class="u"> ${unit}</span></div>
+        </div>`;
+    };
+
+    const noObd = this._state("obd_distanza_viaggio") === null &&
+                  this._state("obd_inizio_viaggio")   === null;
+    if (noObd) {
+      return html`<div class="op-body">
+        <div class="op-section-label">OBD – Ultimo viaggio</div>
+        <div style="padding:24px 0;text-align:center;color:var(--op-muted);font-size:13px;line-height:1.8;">
+          📡 Nessun dato OBD disponibile.<br>
+          Configura la cartella CarScanner nelle opzioni.
+        </div>
+      </div>`;
+    }
+
+    return html`<div class="op-body">
+
+      <div class="op-section-label">🔧 Motore</div>
+      <div class="op-grid">
+        ${this._tile("📍","Distanza","obd_distanza_viaggio","km",2)}
+        ${this._tile("⏱","Durata","obd_durata_viaggio","min",0)}
+        ${this._tile("🏎","Vel. media GPS","obd_velocita_media_gps","km/h",1)}
+        ${this._tile("⚡","Vel. max GPS","obd_velocita_massima_gps","km/h",1)}
+      </div>
+      ${obdRow("⚙️","Giri medi",           this._fmt("obd_giri_motore_medi"),        "rpm", "obd_giri_motore_medi")}
+      ${obdRow("⚙️","Giri massimi",        this._fmt("obd_giri_motore_massimi"),      "rpm", "obd_giri_motore_massimi")}
+      ${obdRow("🌡️","Raffreddamento max",  this._fmt("obd_temp_raffreddamento_max"),  "°C",  "obd_temp_raffreddamento_max")}
+      ${obdRow("🛢️","Olio max",            this._fmt("obd_temperatura_olio_max"),     "°C",  "obd_temperatura_olio_max")}
+      ${obdRow("🌤️","Aria esterna",        this._fmt("obd_temperatura_aria_esterna"), "°C",  "obd_temperatura_aria_esterna")}
+
+      <div class="op-section-label" style="margin-top:14px">⛽ Carburante OBD</div>
+      <div class="op-grid">
+        ${this._tile("💧","Consumato","obd_carburante_consumato","L",3)}
+        ${this._tile("📊","L/100km","obd_consumo_medio","L/100km",2)}
+      </div>
+
+      <div class="op-section-label" style="margin-top:14px">🌿 Emissioni & DPF</div>
+      ${obdRow("🫧","DPF intasamento",      this._fmt("obd_dpf_intasamento"),             "%", "obd_dpf_intasamento")}
+      ${obdRow("🔥","Rigenerazione attiva", this._state("obd_dpf_rigenerazione_attiva") ?? "—", "", "obd_dpf_rigenerazione_attiva")}
+      ${obdRow("📉","Cap. rigenerazione",   this._fmt("obd_capacita_rigenerazione_dpf"),  "%", "obd_capacita_rigenerazione_dpf")}
+      ${obdRow("💧","AdBlue serbatoio",     this._fmt("obd_adblue_nel_serbatoio"),         "L", "obd_adblue_nel_serbatoio")}
+      ${obdRow("🌡️","Gas scarico max",     this._fmt("obd_temp_gas_scarico_max","sensor",0), "°C", "obd_temp_gas_scarico_max")}
+      ${obdRow("🛢️","Diluizione olio",     this._fmt("obd_diluizione_olio"),             "%", "obd_diluizione_olio")}
+
+      <div class="op-section-label" style="margin-top:14px">🔋 Elettrico</div>
+      ${obdRow("⚡","Tensione avviamento",  this._fmt("obd_tensione_avviamento_batteria","sensor",2), "V", "obd_tensione_avviamento_batteria")}
+
+      <div class="op-section-label" style="margin-top:14px">ℹ️ Info viaggio</div>
+      ${this._row("🕐","Inizio viaggio",    this._fmtDate("obd_inizio_viaggio"),  "", "obd_inizio_viaggio")}
+      ${this._row("🔢","Chilometraggio ECU",this._fmt("obd_chilometraggio_ecu","sensor",0), "km","obd_chilometraggio_ecu")}
+    </div>`;
+  }
+
   // ── Render principale ─────────────────────────────────────────────────────
   render() {
     if (!this._config || !this._hass) return nothing;
-    const tabs = { trip:this._renderTrip(), month:this._renderMonth(), total:this._renderTotal(), maint:this._renderMaint() };
+    const tabs = { trip:this._renderTrip(), month:this._renderMonth(), total:this._renderTotal(), obd:this._renderObd(), maint:this._renderMaint() };
     return html`
       <ha-card>
         ${this._renderHero()}

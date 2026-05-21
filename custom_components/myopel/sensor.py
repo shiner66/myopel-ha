@@ -614,6 +614,32 @@ OBD_SENSOR_DESCRIPTIONS: tuple[MyOpelSensorDescription, ...] = (
         icon="mdi:chart-bar",
     ),
     MyOpelSensorDescription(
+        key="obd_trip_dpf_regen_capability_st",
+        data_key="obd_trip_dpf_regen_capability_st",
+        name="OBD – Cap rigenerazione breve",
+        native_unit_of_measurement=PERCENTAGE,
+        state_class=SensorStateClass.MEASUREMENT,
+        icon="mdi:chart-bar",
+    ),
+    MyOpelSensorDescription(
+        key="obd_trip_dpf_since_regen_km",
+        data_key="obd_trip_dpf_since_regen_km",
+        name="OBD – Distanza ultima regen",
+        native_unit_of_measurement=UnitOfLength.KILOMETERS,
+        device_class=SensorDeviceClass.DISTANCE,
+        state_class=SensorStateClass.MEASUREMENT,
+        icon="mdi:fire-off",
+    ),
+    MyOpelSensorDescription(
+        key="obd_trip_dpf_avg_regen_km",
+        data_key="obd_trip_dpf_avg_regen_km",
+        name="OBD – Media km regen DPF",
+        native_unit_of_measurement=UnitOfLength.KILOMETERS,
+        device_class=SensorDeviceClass.DISTANCE,
+        state_class=SensorStateClass.MEASUREMENT,
+        icon="mdi:chart-timeline-variant",
+    ),
+    MyOpelSensorDescription(
         key="obd_trip_adblue_vol_l",
         data_key="obd_trip_adblue_vol_l",
         name="OBD – AdBlue nel serbatoio",
@@ -621,6 +647,15 @@ OBD_SENSOR_DESCRIPTIONS: tuple[MyOpelSensorDescription, ...] = (
         device_class=SensorDeviceClass.VOLUME,
         state_class=SensorStateClass.MEASUREMENT,
         icon="mdi:water",
+    ),
+    MyOpelSensorDescription(
+        key="obd_trip_adblue_range_km",
+        data_key="obd_trip_adblue_range_km",
+        name="OBD – Autonomia AdBlue",
+        native_unit_of_measurement=UnitOfLength.KILOMETERS,
+        device_class=SensorDeviceClass.DISTANCE,
+        state_class=SensorStateClass.MEASUREMENT,
+        icon="mdi:water-percent",
     ),
     MyOpelSensorDescription(
         key="obd_trip_exhaust_after_cat_c",
@@ -647,6 +682,12 @@ OBD_SENSOR_DESCRIPTIONS: tuple[MyOpelSensorDescription, ...] = (
         native_unit_of_measurement=PERCENTAGE,
         state_class=SensorStateClass.MEASUREMENT,
         icon="mdi:oil",
+    ),
+    MyOpelSensorDescription(
+        key="obd_trip_ss_state",
+        data_key="obd_trip_ss_state",
+        name="OBD – Stato Stop-Start",
+        icon="mdi:engine-off",
     ),
 )
 

@@ -57,11 +57,16 @@ _PID_MAP: dict[str, tuple[str, str]] = {
     "obd_trip_dpf_soot_pct":          ("[ECM] Soot clogging level of diesel particulate filter",          "last"),
     "obd_trip_dpf_regen_active":      ("[ECM] DPF regeneration status",                                   "max"),
     "obd_trip_dpf_regen_capability":  ("[ECM] Long-term regeneration capability",                         "last"),
+    "obd_trip_dpf_regen_capability_st": ("[ECM] Short-term regeneration capability",                      "last"),
+    "obd_trip_dpf_since_regen_km":    ("[ECM] Distance traveled since the last regeneration",             "last"),
+    "obd_trip_dpf_avg_regen_km":      ("[ECM] Average mileage for the last 10 regenerations",             "last"),
     "obd_trip_adblue_vol_l":          ("[ECM] Volume of urea solution measured in urea tank",             "last"),
+    "obd_trip_adblue_range_km":       ("[ECM] Vehicle mileage remaining before filling the tank with urea solution", "last"),
     "obd_trip_exhaust_after_cat_c":   ("[ECM] Exhaust gas temperature after pre-catalytic converter",     "max"),
     # ── Diagnostics ──────────────────────────────────────────────────────────
     "obd_trip_battery_startup_v":     ("[ECM] Minimum battery voltage at startup",                        "last"),
     "obd_trip_oil_dilution_pct":      ("[ECM] Evaluation of the degree of dilution of motor oil",         "last"),
+    "obd_trip_ss_state":              ("[ECM] Stop and Start function state",                             "last"),
 }
 
 # Reverse lookup: PID name → list of (data_key, agg)
@@ -82,12 +87,16 @@ _LTS_META: dict[str, tuple[str, str | None]] = {
     "obd_trip_fuel_consumed_l":      ("OBD – Carburante consumato",       "L"),
     "obd_trip_consumption_l100km":   ("OBD – Consumo medio",              "L/100km"),
     "obd_trip_air_temp_c":           ("OBD – Temperatura aria esterna",   "°C"),
-    "obd_trip_dpf_soot_pct":         ("OBD – DPF intasamento",            "%"),
-    "obd_trip_dpf_regen_capability": ("OBD – Capacità rigenerazione DPF", "%"),
-    "obd_trip_adblue_vol_l":         ("OBD – AdBlue nel serbatoio",       "L"),
-    "obd_trip_exhaust_after_cat_c":  ("OBD – Temp. gas scarico max",      "°C"),
-    "obd_trip_battery_startup_v":    ("OBD – Tensione avviamento batteria","V"),
-    "obd_trip_oil_dilution_pct":     ("OBD – Diluizione olio",            "%"),
+    "obd_trip_dpf_soot_pct":              ("OBD – DPF intasamento",              "%"),
+    "obd_trip_dpf_regen_capability":      ("OBD – Capacità rigenerazione DPF",   "%"),
+    "obd_trip_dpf_regen_capability_st":   ("OBD – Cap. rigenerazione breve",     "%"),
+    "obd_trip_dpf_since_regen_km":        ("OBD – Distanza ultima rigenerazione", "km"),
+    "obd_trip_dpf_avg_regen_km":          ("OBD – Media km rigenerazione DPF",   "km"),
+    "obd_trip_adblue_vol_l":              ("OBD – AdBlue nel serbatoio",         "L"),
+    "obd_trip_adblue_range_km":           ("OBD – Autonomia AdBlue",             "km"),
+    "obd_trip_exhaust_after_cat_c":       ("OBD – Temp. gas scarico max",        "°C"),
+    "obd_trip_battery_startup_v":         ("OBD – Tensione avviamento batteria", "V"),
+    "obd_trip_oil_dilution_pct":          ("OBD – Diluizione olio",              "%"),
 }
 
 
@@ -119,13 +128,13 @@ _RBS_FIXES: dict[str, dict[str, float]] = {
     "[ECM] NOx content measured at the inlet of the NOx catalytic converter": {
         "div": 1.0, "mul": 0.1, "ofs": 0.0,
     },
-    "[ECM] Open-loop soot load": {
+    "[ECM] Open loop soot load assessment of the diesel particulate filter": {
         "div": 1024.0, "mul": 1.0, "ofs": 0.0,
     },
     "[ECM] Soot clogging level of diesel particulate filter": {
         "div": 10.24, "mul": 1.0, "ofs": 0.0,
     },
-    "[ECM] Average mileage of last 10 regenerations": {
+    "[ECM] Average mileage for the last 10 regenerations": {
         "div": 16.0, "mul": 1.0, "ofs": 0.0,
     },
 }

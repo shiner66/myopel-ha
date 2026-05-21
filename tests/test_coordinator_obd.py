@@ -198,13 +198,13 @@ class TestComputeStats:
         result = _compute_stats(pids, {}, tmp_path / "x.csv")
         assert "obd_trip_ss_switch" not in result
 
-    def test_dpf_since_regen_not_in_preset(self, tmp_path):
+    def test_dpf_since_regen_in_preset(self, tmp_path):
         pids = {
             "Giri motore": [(0.0, 800.0)],
-            "[ECM] Distance traveled since the last regeneration": [(0.0, 9999.0)],
+            "[ECM] Distance traveled since the last regeneration": [(0.0, 9999.0), (1.0, 10000.0)],
         }
         result = _compute_stats(pids, {}, tmp_path / "x.csv")
-        assert "obd_trip_dpf_since_regen_km" not in result
+        assert result.get("obd_trip_dpf_since_regen_km") == pytest.approx(10000.0, rel=1e-3)
 
 
 # ── Fuel integration ──────────────────────────────────────────────────────────
@@ -553,9 +553,9 @@ class TestRbsSwapValue:
             "[ECM] EGR valve position",
             "[ECM] Air metering valve position",
             "[ECM] NOx content measured at the inlet of the NOx catalytic converter",
-            "[ECM] Open-loop soot load",
+            "[ECM] Open loop soot load assessment of the diesel particulate filter",
             "[ECM] Soot clogging level of diesel particulate filter",
-            "[ECM] Average mileage of last 10 regenerations",
+            "[ECM] Average mileage for the last 10 regenerations",
         }
         assert set(_RBS_FIXES.keys()) == expected
 

@@ -870,8 +870,12 @@ class MyOpelCard extends LitElement {
       ["obd_diluizione_olio",               3,  "Diluizione olio elevata",    5,  "Diluizione olio critica",      "%",   true,  1],
       // Gas scarico pre-cat: > 640°C warn, > 700°C alert (regen può arrivare a 600°C)
       ["obd_temp_gas_scarico_max",         640,  "Gas scarico elevato",      700,  "Gas scarico critico",          "°C",  true,  0],
-      // AdBlue: < 5 L warn, < 2 L alert
+      // AdBlue serbatoio: < 5 L warn, < 2 L alert
       ["obd_adblue_nel_serbatoio",           5,  "AdBlue basso",               2,  "AdBlue quasi esaurito",        "L",   false, 1],
+      // AdBlue autonomia: < 1500 km warn, < 500 km alert
+      ["obd_autonomia_adblue",            1500,  "Autonomia AdBlue bassa",    500,  "Autonomia AdBlue critica",     "km",  false, 0],
+      // Cap. regen. breve: < 50% warn, < 20% alert
+      ["obd_cap_rigenerazione_breve",       50,  "Cap. regen. breve ridotta",  20,  "Cap. regen. breve critica",    "%",   false, 1],
     ];
     const res = [];
     for (const [sfx, wt, wl, at, al, unit, hisBad, dec] of CHECKS) {
@@ -1385,19 +1389,24 @@ class MyOpelCard extends LitElement {
       </div>
 
       <div class="op-section-label" style="margin-top:14px">🌿 Emissioni & DPF</div>
-      ${obdRow("🫧","DPF intasamento",      this._fmt("obd_dpf_intasamento"),             "%", "obd_dpf_intasamento")}
-      ${obdRow("🔥","Stato rigenerazione",   this._fmt("obd_dpf_rigenerazione_attiva","sensor",0), "", "obd_dpf_rigenerazione_attiva")}
-      ${obdRow("📉","Cap. rigenerazione",   this._fmt("obd_capacita_rigenerazione_dpf"),  "%", "obd_capacita_rigenerazione_dpf")}
-      ${obdRow("💧","AdBlue serbatoio",     this._fmt("obd_adblue_nel_serbatoio"),         "L", "obd_adblue_nel_serbatoio")}
-      ${obdRow("🌡️","Gas scarico max",     this._fmt("obd_temp_gas_scarico_max","sensor",0), "°C", "obd_temp_gas_scarico_max")}
-      ${obdRow("🛢️","Diluizione olio",     this._fmt("obd_diluizione_olio"),             "%", "obd_diluizione_olio")}
+      ${obdRow("🫧","DPF intasamento",       this._fmt("obd_dpf_intasamento"),                           "%",  "obd_dpf_intasamento")}
+      ${obdRow("🔥","Stato rigenerazione",    this._fmt("obd_dpf_rigenerazione_attiva","sensor",0),       "",   "obd_dpf_rigenerazione_attiva")}
+      ${obdRow("📏","Dist. ultima regen.",    this._fmt("obd_distanza_ultima_regen","sensor",1),          "km", "obd_distanza_ultima_regen")}
+      ${obdRow("📉","Cap. regen. lunga",      this._fmt("obd_capacita_rigenerazione_dpf"),                "%",  "obd_capacita_rigenerazione_dpf")}
+      ${obdRow("📉","Cap. regen. breve",      this._fmt("obd_cap_rigenerazione_breve"),                   "%",  "obd_cap_rigenerazione_breve")}
+      ${obdRow("📊","Media km regen DPF",     this._fmt("obd_media_km_regen_dpf","sensor",0),             "km", "obd_media_km_regen_dpf")}
+      ${obdRow("💧","AdBlue serbatoio",       this._fmt("obd_adblue_nel_serbatoio"),                      "L",  "obd_adblue_nel_serbatoio")}
+      ${obdRow("🛣️","Autonomia AdBlue",       this._fmt("obd_autonomia_adblue","sensor",0),               "km", "obd_autonomia_adblue")}
+      ${obdRow("🌡️","Gas scarico max",       this._fmt("obd_temp_gas_scarico_max","sensor",0),           "°C", "obd_temp_gas_scarico_max")}
+      ${obdRow("🛢️","Diluizione olio",       this._fmt("obd_diluizione_olio"),                           "%",  "obd_diluizione_olio")}
 
-      <div class="op-section-label" style="margin-top:14px">🔋 Elettrico</div>
-      ${obdRow("⚡","Tensione avviamento",  this._fmt("obd_tensione_avviamento_batteria","sensor",2), "V", "obd_tensione_avviamento_batteria")}
+      <div class="op-section-label" style="margin-top:14px">🔋 Elettrico & motore</div>
+      ${obdRow("⚡","Tensione avviamento",   this._fmt("obd_tensione_avviamento_batteria","sensor",2),   "V",  "obd_tensione_avviamento_batteria")}
+      ${obdRow("🔄","Stop-Start stato",      this._fmt("obd_stato_stop_start","sensor",0),               "",   "obd_stato_stop_start")}
 
       <div class="op-section-label" style="margin-top:14px">ℹ️ Info viaggio</div>
-      ${this._row("🕐","Inizio viaggio",    this._fmtDate("obd_inizio_viaggio"),  "", "obd_inizio_viaggio")}
-      ${this._row("🔢","Chilometraggio ECU",this._fmt("obd_chilometraggio_ecu","sensor",0), "km","obd_chilometraggio_ecu")}
+      ${this._row("🕐","Inizio viaggio",     this._fmtDate("obd_inizio_viaggio"),                        "", "obd_inizio_viaggio")}
+      ${this._row("🔢","Chilometraggio ECU", this._fmt("obd_chilometraggio_ecu","sensor",0),             "km","obd_chilometraggio_ecu")}
     </div>`;
   }
 

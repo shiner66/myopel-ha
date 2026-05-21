@@ -739,3 +739,144 @@ class TestMultiCsvOrdering:
         assert states[0] == "idle"
         assert states[1] == "post_regen"
         assert states[2] == "idle"
+
+
+# ── ZIP ingestion ─────────────────────────────────────────────────────────────
+
+import zipfile as _zipfile
+
+
+def _write_zip(folder: Path, zip_name: str, csv_files: dict[str, list[tuple[float, str, float, str]]]) -> Path:
+    """Create a ZIP archive containing the given CSV files."""
+    zip_path = folder / zip_name
+    with _zipfile.ZipFile(zip_path, "w") as zf:
+        for csv_name, rows in csv_files.items():
+            lines = [CSV_HEADER]
+            for sec, pid, val, unit in rows:
+                lines.append(f"{sec};{pid};{val};{unit};;\n")
+            zf.writestr(csv_name, "".join(lines))
+    return zip_path
+
+
+class TestZipIngestion:
+    """ZIP archives containing CSVs are extracted and parsed."""
+
+    def test_zip_csvs_are_parsed(self, tmp_path):
+        _write_zip(tmp_path, "exported_records.zip", {
+            "20260101_100000.csv": [
+                (0.0, "Giri motore", 800.0, "rpm"),
+                (1.0, "Distanza percorsa:", 3.5, "km"),
+            ],
+            "20260102_110000.csv": [
+                (0.0, "Giri motore", 1200.0, "rpm"),
+                (1.0, "Distanza percorsa:", 6.0, "km"),
+            ],
+        })
+
+        hass = MagicMock()
+        hass.async_add_executor_job = lambda func, *a: _run_in_thread(func, *a)
+        coord = MyOpelObdCoordinator(
+            hass, str(tmp_path), scan_interval=60, entry_id="zip1",
+            delete_after_parse=False,
+        )
+        loop = asyncio.new_event_loop()
+        try:
+            loop.run_until_complete(coord.async_load_persisted())
+            data = loop.run_until_complete(coord._async_update_data())
+        finally:
+            loop.close()
+
+        assert len(coord._history) == 2
+        assert data["obd_trip_distance_km"] == 6.0  # latest trip
+        assert "20260101_100000.csv" in coord._parsed_csv_names
+        assert "20260102_110000.csv" in coord._parsed_csv_names
+
+    def test_zip_deleted_when_delete_after_parse(self, tmp_path):
+        zip_path = _write_zip(tmp_path, "exported_records_2.zip", {
+            "20260103_120000.csv": [
+                (0.0, "Giri motore", 900.0, "rpm"),
+            ],
+        })
+
+        hass = MagicMock()
+        hass.async_add_executor_job = lambda func, *a: _run_in_thread(func, *a)
+        coord = MyOpelObdCoordinator(
+            hass, str(tmp_path), scan_interval=60, entry_id="zip2",
+            delete_after_parse=True,
+        )
+        loop = asyncio.new_event_loop()
+        try:
+            loop.run_until_complete(coord.async_load_persisted())
+            loop.run_until_complete(coord._async_update_data())
+        finally:
+            loop.close()
+
+        assert not zip_path.exists()
+
+    def test_zip_and_standalone_csv_sorted_together(self, tmp_path):
+        # standalone CSV from 2026-01-02, zip contains 2026-01-01 and 2026-01-03
+        _write_csv(tmp_path, "20260102_120000.csv", [
+            (0.0, "Giri motore", 1000.0, "rpm"),
+        ])
+        _write_zip(tmp_path, "exported_records.zip", {
+            "20260101_060000.csv": [(0.0, "Giri motore", 800.0, "rpm")],
+            "20260103_080000.csv": [(0.0, "Giri motore", 1200.0, "rpm")],
+        })
+
+        hass = MagicMock()
+        hass.async_add_executor_job = lambda func, *a: _run_in_thread(func, *a)
+        coord = MyOpelObdCoordinator(
+            hass, str(tmp_path), scan_interval=60, entry_id="zip3",
+            delete_after_parse=False,
+        )
+        loop = asyncio.new_event_loop()
+        try:
+            loop.run_until_complete(coord.async_load_persisted())
+            loop.run_until_complete(coord._async_update_data())
+        finally:
+            loop.close()
+
+        filenames = [t["obd_filename"] for t in coord._history]
+        assert filenames == [
+            "20260101_060000.csv",
+            "20260102_120000.csv",
+            "20260103_080000.csv",
+        ]
+
+    def test_already_seen_csvs_skipped_in_new_zip(self, tmp_path):
+        # First pass: parse a standalone CSV
+        _write_csv(tmp_path, "20260101_100000.csv", [
+            (0.0, "Giri motore", 800.0, "rpm"),
+        ])
+
+        hass = MagicMock()
+        hass.async_add_executor_job = lambda func, *a: _run_in_thread(func, *a)
+        coord = MyOpelObdCoordinator(
+            hass, str(tmp_path), scan_interval=60, entry_id="zip4",
+            delete_after_parse=False,
+        )
+        loop = asyncio.new_event_loop()
+        try:
+            loop.run_until_complete(coord.async_load_persisted())
+            loop.run_until_complete(coord._async_update_data())
+        finally:
+            loop.close()
+
+        assert len(coord._history) == 1
+        assert "20260101_100000.csv" in coord._parsed_csv_names
+
+        # Second pass: a ZIP arrives containing the same file + one new one
+        _write_zip(tmp_path, "exported_records.zip", {
+            "20260101_100000.csv": [(0.0, "Giri motore", 9999.0, "rpm")],  # duplicate
+            "20260102_110000.csv": [(0.0, "Giri motore", 1200.0, "rpm")],  # new
+        })
+
+        loop = asyncio.new_event_loop()
+        try:
+            loop.run_until_complete(coord._async_update_data())
+        finally:
+            loop.close()
+
+        # Only the new CSV should have been added to history
+        assert len(coord._history) == 2
+        assert coord._history[1]["obd_filename"] == "20260102_110000.csv"

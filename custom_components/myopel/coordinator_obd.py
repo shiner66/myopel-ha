@@ -1,10 +1,13 @@
 """OBD coordinator for MyOpel — reads CarScanner CSV exports.
 
 Behaviour:
-- Reads every new `*.csv` in the configured folder (oldest → newest), computes
-  trip stats for ALL PIDs found, and persists the result to HA storage.
-- After a successful parse the CSV is deleted (configurable) so files don't
-  accumulate.
+- Reads every new `*.csv` (and `*.zip` archives containing CSVs) in the
+  configured folder (oldest → newest by filename timestamp), computes trip
+  stats for ALL PIDs found, and persists the result to HA storage.
+- Already-processed filenames are remembered so they are never re-parsed,
+  even if they reappear inside a new ZIP archive.
+- After a successful parse the CSV / ZIP is deleted (configurable) so files
+  don't accumulate.
 - The latest parsed trip survives HA restarts even if the folder is empty.
 - A short history of recent trips is kept in storage for future aggregations.
 - The set of discovered PID names is persisted, so the options flow can offer
@@ -15,6 +18,9 @@ from __future__ import annotations
 import csv
 import logging
 import re
+import shutil
+import tempfile
+import zipfile
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
@@ -264,12 +270,14 @@ class MyOpelObdCoordinator(DataUpdateCoordinator):
             hass, OBD_STORAGE_VERSION, OBD_STORAGE_KEY_TPL.format(entry_id=entry_id)
         )
         # In-memory mirror of the persisted store:
-        #   "latest":   dict with the most recent parsed trip's data
-        #   "history":  list[dict] with up to OBD_HISTORY_MAX_TRIPS recent trips
-        #   "pids":     dict[slug -> {"name": str, "unit": str|None}]
+        #   "latest":        dict with the most recent parsed trip's data
+        #   "history":       list[dict] with up to OBD_HISTORY_MAX_TRIPS recent trips
+        #   "pids":          dict[slug -> {"name": str, "unit": str|None}]
+        #   "parsed_files":  set[str] of filenames already processed (dedup)
         self._latest: dict[str, Any] = {}
         self._history: list[dict[str, Any]] = []
         self._discovered_pids: dict[str, dict[str, Any]] = {}
+        self._parsed_csv_names: set[str] = set()
 
     @property
     def discovered_pids(self) -> dict[str, dict[str, Any]]:
@@ -282,6 +290,7 @@ class MyOpelObdCoordinator(DataUpdateCoordinator):
         self._latest = data.get("latest") or {}
         self._history = data.get("history") or []
         self._discovered_pids = data.get("pids") or {}
+        self._parsed_csv_names = set(data.get("parsed_files") or [])
         # Seed coordinator data so sensors are populated immediately, even
         # before the first refresh (and before any new CSV arrives).
         if self._latest:
@@ -296,6 +305,7 @@ class MyOpelObdCoordinator(DataUpdateCoordinator):
             "latest": self._latest,
             "history": self._history[-OBD_HISTORY_MAX_TRIPS:],
             "pids": self._discovered_pids,
+            "parsed_files": list(self._parsed_csv_names),
         })
 
     async def _async_inject_trip_statistics(self, trip_data: dict[str, Any]) -> None:
@@ -352,12 +362,16 @@ class MyOpelObdCoordinator(DataUpdateCoordinator):
 
     async def _async_update_data(self) -> dict[str, Any]:
         try:
-            parsed = await self.hass.async_add_executor_job(self._parse_pending_csvs)
+            parsed, new_names = await self.hass.async_add_executor_job(
+                self._parse_pending_csvs, frozenset(self._parsed_csv_names)
+            )
         except _NoObdFileYet:
             _LOGGER.debug("MyOpel OBD: nessun nuovo CSV in %s", self.folder_path)
             return self._latest
         except Exception as err:
             raise UpdateFailed(f"OBD CSV parse error: {err}") from err
+
+        self._parsed_csv_names.update(new_names)
 
         if not parsed:
             return self._latest
@@ -414,38 +428,100 @@ class MyOpelObdCoordinator(DataUpdateCoordinator):
 
     # ── CSV parsing ──────────────────────────────────────────────────────────
 
-    def _parse_pending_csvs(self) -> list[dict[str, Any]]:
+    def _parse_pending_csvs(
+        self,
+        already_seen: frozenset[str] = frozenset(),
+    ) -> tuple[list[dict[str, Any]], set[str]]:
+        """Parse all new CSVs (and ZIPs containing CSVs) in the folder.
+
+        Returns (results, new_names) where new_names is the set of filenames
+        successfully parsed this run.  Filenames in already_seen are skipped.
+        Raises _NoObdFileYet when the folder contains no CSV/ZIP candidates.
+        """
         folder = Path(self.folder_path)
         folder.mkdir(parents=True, exist_ok=True)
 
-        csvs = sorted(folder.glob("*.csv"), key=_csv_recording_key)
-        if not csvs:
+        # (csv_path, source_zip | None)
+        csv_entries: list[tuple[Path, Path | None]] = []
+        zip_paths: list[Path] = []
+        tmp_dirs: list[str] = []
+
+        for zip_path in sorted(folder.glob("*.zip")):
+            try:
+                with zipfile.ZipFile(zip_path) as zf:
+                    tmp = tempfile.mkdtemp(prefix="myopel_obd_")
+                    tmp_dirs.append(tmp)
+                    for entry_name in zf.namelist():
+                        if entry_name.lower().endswith(".csv") and not entry_name.startswith("__MACOSX"):
+                            try:
+                                zf.extract(entry_name, tmp)
+                                csv_entries.append((Path(tmp) / entry_name, zip_path))
+                            except Exception as err:  # noqa: BLE001
+                                _LOGGER.warning(
+                                    "MyOpel OBD: errore estrazione %s da %s: %s",
+                                    entry_name, zip_path.name, err,
+                                )
+                zip_paths.append(zip_path)
+            except zipfile.BadZipFile as err:
+                _LOGGER.warning("MyOpel OBD: zip non valido %s (%s)", zip_path.name, err)
+            except Exception as err:  # noqa: BLE001
+                _LOGGER.warning("MyOpel OBD: errore apertura zip %s (%s)", zip_path.name, err)
+
+        for csv_path in folder.glob("*.csv"):
+            csv_entries.append((csv_path, None))
+
+        if not csv_entries:
+            for tmp in tmp_dirs:
+                shutil.rmtree(tmp, ignore_errors=True)
             raise _NoObdFileYet
 
-        results: list[dict[str, Any]] = []
-        for path in csvs:
-            try:
-                result = _parse_csv_file(path, self.rbs_fix_pids)
-            except UpdateFailed:
-                _LOGGER.warning("MyOpel OBD: %s vuoto o malformato, ignoro", path.name)
-                continue
-            except Exception as err:  # noqa: BLE001
-                _LOGGER.warning(
-                    "MyOpel OBD: errore parsing %s (%s), file lasciato sul disco",
-                    path.name, err,
-                )
-                continue
+        csv_entries.sort(key=lambda e: _csv_recording_key(e[0]))
 
-            results.append(result)
-            if self.delete_after_parse:
+        results: list[dict[str, Any]] = []
+        new_seen: set[str] = set()
+
+        try:
+            for csv_path, zip_source in csv_entries:
+                if csv_path.name in already_seen:
+                    _LOGGER.debug("MyOpel OBD: %s già parsato, ignoro", csv_path.name)
+                    continue
                 try:
-                    path.unlink()
-                    _LOGGER.debug("MyOpel OBD: %s elaborato e rimosso", path.name)
-                except OSError as err:
+                    result = _parse_csv_file(csv_path, self.rbs_fix_pids)
+                except UpdateFailed:
+                    _LOGGER.warning("MyOpel OBD: %s vuoto o malformato, ignoro", csv_path.name)
+                    continue
+                except Exception as err:  # noqa: BLE001
                     _LOGGER.warning(
-                        "MyOpel OBD: impossibile rimuovere %s (%s)", path.name, err,
+                        "MyOpel OBD: errore parsing %s (%s), file lasciato sul disco",
+                        csv_path.name, err,
                     )
-        return results
+                    continue
+
+                results.append(result)
+                new_seen.add(csv_path.name)
+
+                if self.delete_after_parse and zip_source is None:
+                    try:
+                        csv_path.unlink()
+                        _LOGGER.debug("MyOpel OBD: %s elaborato e rimosso", csv_path.name)
+                    except OSError as err:
+                        _LOGGER.warning(
+                            "MyOpel OBD: impossibile rimuovere %s (%s)", csv_path.name, err,
+                        )
+        finally:
+            if self.delete_after_parse:
+                for zip_path in zip_paths:
+                    try:
+                        zip_path.unlink()
+                        _LOGGER.debug("MyOpel OBD: zip %s elaborato e rimosso", zip_path.name)
+                    except OSError as err:
+                        _LOGGER.warning(
+                            "MyOpel OBD: impossibile rimuovere zip %s (%s)", zip_path.name, err,
+                        )
+            for tmp in tmp_dirs:
+                shutil.rmtree(tmp, ignore_errors=True)
+
+        return results, new_seen
 
 
 # ── Parsing primitives (module-level for testability) ────────────────────────

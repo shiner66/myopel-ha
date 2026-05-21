@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import struct
 import sys
 from pathlib import Path
 from unittest.mock import MagicMock
@@ -9,11 +10,16 @@ from unittest.mock import MagicMock
 import pytest
 
 from custom_components.myopel.coordinator_obd import (
+    CATALOG_SEP,
+    RECORD_MARKER,
     MyOpelObdCoordinator,
     _LTS_META,
     _RBS_FIXES,
+    _brc_parse_catalog,
+    _brc_read_ps,
     _compute_stats,
     _csv_recording_key,
+    _parse_brc_file,
     _parse_csv_file,
     _rbs_swap_value,
     _slugify_pid,
@@ -880,3 +886,239 @@ class TestZipIngestion:
         # Only the new CSV should have been added to history
         assert len(coord._history) == 2
         assert coord._history[1]["obd_filename"] == "20260102_110000.csv"
+
+
+# ── BRC binary parser ─────────────────────────────────────────────────────────
+
+def _pstr(s: str) -> bytes:
+    """Pascal-style string: 1-byte length prefix + UTF-8 content."""
+    b = s.encode("utf-8")
+    return bytes([len(b)]) + b
+
+
+def _make_record(rel_ts: float, pid_id: bytes, val: float) -> bytes:
+    return RECORD_MARKER + struct.pack("<d", rel_ts) + pid_id + struct.pack("<d", val)
+
+
+def _make_brc(
+    pids: dict[str, tuple[bytes, list[tuple[float, float]]]],
+    gps_bbox_size: int = 8,
+) -> bytes:
+    """Build a minimal well-formed BRC binary file in memory.
+
+    pids: {name: (pid_id_4bytes, [(rel_ts, val), ...])}
+    gps_bbox_size: total GPS section size INCLUDING the trailing CATALOG_SEP.
+    """
+    header = (
+        _pstr("CARSCANNERRECORD")
+        + struct.pack("<I", 2)
+        + _pstr("DEV001")
+        + _pstr("Test Car")
+        + _pstr("ECU_MODEL")
+        + _pstr("BT")
+    )
+    # GPS bbox section: arbitrary padding + CATALOG_SEP at the end
+    gps_section = b"\x00" * (gps_bbox_size - 4) + CATALOG_SEP
+
+    catalog = b""
+    entries = list(pids.items())
+    for i, (name, (pid_id, records)) in enumerate(entries):
+        embedded = _make_record(0.0, pid_id, records[0][1] if records else 0.0)
+        sep = CATALOG_SEP if i < len(entries) - 1 else b""
+        catalog += pid_id + _pstr(name) + _pstr("S") + struct.pack("<I", 0) + embedded + sep
+
+    data = b""
+    for _name, (pid_id, records) in entries:
+        for rel_ts, val in records:
+            data += _make_record(rel_ts, pid_id, val)
+
+    return header + gps_section + catalog + data
+
+
+class TestBrcReadPs:
+    def test_ascii_string(self):
+        buf = b"\x05hello"
+        s, pos = _brc_read_ps(buf, 0)
+        assert s == "hello"
+        assert pos == 6
+
+    def test_empty_string(self):
+        buf = b"\x00extra"
+        s, pos = _brc_read_ps(buf, 0)
+        assert s == ""
+        assert pos == 1
+
+    def test_utf8_accented(self):
+        name = "Altitudine (GPS)"
+        enc = name.encode("utf-8")
+        buf = bytes([len(enc)]) + enc
+        s, pos = _brc_read_ps(buf, 0)
+        assert s == name
+        assert pos == len(buf)
+
+
+class TestBrcParseCatalog:
+    def test_single_entry(self):
+        pid_id = b"\x01\x00\x00\x00"
+        embedded = _make_record(0.0, pid_id, 100.0)
+        cat = pid_id + _pstr("RPM") + _pstr("R") + struct.pack("<I", 0) + embedded
+        pid_map = _brc_parse_catalog(cat, 0)
+        assert pid_id in pid_map
+        assert pid_map[pid_id] == "RPM"
+
+    def test_two_entries_with_separator(self):
+        pid1 = b"\x01\x00\x00\x00"
+        pid2 = b"\x02\x00\x00\x00"
+        embedded1 = _make_record(0.0, pid1, 100.0)
+        embedded2 = _make_record(0.0, pid2, 200.0)
+        cat = (
+            pid1 + _pstr("RPM") + _pstr("R") + struct.pack("<I", 0) + embedded1 + CATALOG_SEP
+            + pid2 + _pstr("SPEED") + _pstr("S") + struct.pack("<I", 0) + embedded2
+        )
+        pid_map = _brc_parse_catalog(cat, 0)
+        assert pid_map[pid1] == "RPM"
+        assert pid_map[pid2] == "SPEED"
+
+    def test_stops_at_record_marker_with_no_prior_entries(self):
+        # If RECORD_MARKER appears at start → empty map
+        pid_map = _brc_parse_catalog(RECORD_MARKER + b"\x00" * 20, 0)
+        assert pid_map == {}
+
+
+class TestParseBrcFile:
+    def test_basic_parse_returns_stats(self, tmp_path):
+        pid_id = b"\x01\x00\x00\x00"
+        # Catalog embeds ts=0 with val=records[0][1]=1000.0; data has 3 records.
+        # All 4 samples (1000, 1000, 1200, 800) are in the window → mean=1000.
+        brc = _make_brc({"[ECM] Crankshaft speed": (pid_id, [(1.0, 1000.0), (2.0, 1200.0), (3.0, 800.0)])})
+        path = tmp_path / "2026-05-20 10-00-00.brc"
+        path.write_bytes(brc)
+        result = _parse_brc_file(path)
+        assert result["obd_filename"] == path.name
+        assert result["obd_trip_avg_rpm"] == 1000
+        # duration_s = 3.0 s → round(3/60, 1) = 0.1 min
+        assert result["obd_trip_duration_min"] == pytest.approx(0.1, abs=0.01)
+
+    def test_short_gps_bbox(self, tmp_path):
+        """GPS bbox section shorter than 40 bytes is handled correctly."""
+        pid_id = b"\x01\x00\x00\x00"
+        # embedded ts=0 val=1000; data: 900, 1100 → all values=[1000,900,1100] mean=1000
+        brc = _make_brc(
+            {"[ECM] Crankshaft speed": (pid_id, [(1.0, 1000.0), (2.0, 900.0), (3.0, 1100.0)])},
+            gps_bbox_size=12,  # short bbox (8 bytes + CATALOG_SEP)
+        )
+        path = tmp_path / "2026-05-20 11-00-00.brc"
+        path.write_bytes(brc)
+        result = _parse_brc_file(path)
+        assert result["obd_trip_avg_rpm"] == 1000
+
+    def test_multiple_pids(self, tmp_path):
+        # RPM: embedded val=1000, data=[1000,2000] → mean(1000,1000,2000)=1333
+        # ODO: embedded val=12345, data=[12345,12346] → last=12346
+        brc = _make_brc({
+            "[ECM] Crankshaft speed": (b"\x01\x00\x00\x00", [(1.0, 1000.0), (2.0, 2000.0)]),
+            "[ECM] Total mileage":    (b"\x02\x00\x00\x00", [(1.0, 12345.0), (2.0, 12346.0)]),
+        })
+        path = tmp_path / "2026-05-20 12-00-00.brc"
+        path.write_bytes(brc)
+        result = _parse_brc_file(path)
+        assert result["obd_trip_avg_rpm"] == 1333
+        assert result["obd_trip_odometer_km"] == 12346
+
+    def test_rbs_fix_applied(self, tmp_path):
+        """RBS correction is applied when the PID name is in rbs_fix_pids."""
+        pid_name = "[ECM] Average mileage for the last 10 regenerations"
+        pid_id = b"\x03\x00\x00\x00"
+        fix = _RBS_FIXES[pid_name]
+        wrong_val = 3296.94  # typical byte-swapped value
+        brc = _make_brc({pid_name: (pid_id, [(1.0, wrong_val)])})
+        path = tmp_path / "2026-05-20 13-00-00.brc"
+        path.write_bytes(brc)
+        result_no_fix = _parse_brc_file(path)
+        result_fix    = _parse_brc_file(path, rbs_fix_pids=[pid_name])
+        no_fix_val = result_no_fix["obd_trip_dpf_avg_regen_km"]
+        fix_val    = result_fix["obd_trip_dpf_avg_regen_km"]
+        assert no_fix_val == pytest.approx(wrong_val, rel=0.01)
+        corrected = _rbs_swap_value(wrong_val, fix["div"], fix["mul"], fix["ofs"])
+        assert fix_val == pytest.approx(corrected, rel=0.01)
+
+    def test_empty_brc_raises(self, tmp_path):
+        from homeassistant.helpers.update_coordinator import UpdateFailed
+        path = tmp_path / "2026-05-20 14-00-00.brc"
+        path.write_bytes(b"\x00" * 4)
+        with pytest.raises(UpdateFailed):
+            _parse_brc_file(path)
+
+    def test_pid_order_does_not_matter(self, tmp_path):
+        """PIDs in the catalog may appear in any order without affecting output."""
+        pids_ab = _make_brc({
+            "Giri motore":       (b"\x01\x00\x00\x00", [(1.0, 1000.0), (2.0, 2000.0)]),
+            "Distanza percorsa:":(b"\x02\x00\x00\x00", [(1.0, 0.0),    (2.0, 10.0)]),
+        })
+        pids_ba = _make_brc({
+            "Distanza percorsa:":(b"\x02\x00\x00\x00", [(1.0, 0.0),    (2.0, 10.0)]),
+            "Giri motore":       (b"\x01\x00\x00\x00", [(1.0, 1000.0), (2.0, 2000.0)]),
+        })
+        p_ab = tmp_path / "2026-05-20 15-00-00.brc"
+        p_ba = tmp_path / "2026-05-20 15-00-01.brc"
+        p_ab.write_bytes(pids_ab)
+        p_ba.write_bytes(pids_ba)
+        r_ab = _parse_brc_file(p_ab)
+        r_ba = _parse_brc_file(p_ba)
+        assert r_ab["obd_trip_avg_rpm"] == r_ba["obd_trip_avg_rpm"]
+        assert r_ab["obd_trip_distance_km"] == r_ba["obd_trip_distance_km"]
+
+
+class TestBrcInPendingCsvs:
+    """BRC files are picked up by _parse_pending_csvs alongside CSVs."""
+
+    def _make_coord(self, tmp_path: Path) -> MyOpelObdCoordinator:
+        hass = MagicMock()
+        hass.async_add_executor_job = lambda func, *a: _run_in_thread(func, *a)
+        return MyOpelObdCoordinator(
+            hass=hass,
+            folder_path=str(tmp_path),
+            scan_interval=60,
+            entry_id="test_brc",
+            delete_after_parse=False,
+        )
+
+    def test_brc_file_parsed(self, tmp_path):
+        pid_id = b"\x01\x00\x00\x00"
+        # embedded val=1000, data=[1000,1000] → mean=1000
+        brc = _make_brc({"[ECM] Crankshaft speed": (pid_id, [(1.0, 1000.0), (2.0, 1000.0)])})
+        (tmp_path / "2026-05-20 16-00-00.brc").write_bytes(brc)
+        coord = self._make_coord(tmp_path)
+        results, new_seen = coord._parse_pending_csvs()
+        assert len(results) == 1
+        assert results[0]["obd_trip_avg_rpm"] == 1000
+        assert "2026-05-20 16-00-00.brc" in new_seen
+
+    def test_brc_and_csv_sorted_together(self, tmp_path):
+        CSV_HEADER = "Time;PID;Value;Unit;Lat;Lon\n"
+        csv_path = tmp_path / "20260520_080000.csv"
+        csv_path.write_text(CSV_HEADER + "1.0;Giri motore;800.0;rpm;;\n2.0;Giri motore;1200.0;rpm;;\n")
+
+        pid_id = b"\x01\x00\x00\x00"
+        brc = _make_brc({"[ECM] Crankshaft speed": (pid_id, [(1.0, 1000.0), (2.0, 2000.0)])})
+        (tmp_path / "2026-05-20 10-00-00.brc").write_bytes(brc)
+
+        coord = self._make_coord(tmp_path)
+        results, new_seen = coord._parse_pending_csvs()
+        assert len(results) == 2
+        filenames = [r["obd_filename"] for r in results]
+        # CSV (08:00) should come before BRC (10:00)
+        assert filenames.index("20260520_080000.csv") < filenames.index("2026-05-20 10-00-00.brc")
+
+    def test_brc_in_zip_parsed(self, tmp_path):
+        import zipfile
+        pid_id = b"\x01\x00\x00\x00"
+        # embedded val=1000, data=[1000,1000] → mean=1000
+        brc = _make_brc({"[ECM] Crankshaft speed": (pid_id, [(1.0, 1000.0), (2.0, 1000.0)])})
+        zip_path = tmp_path / "exported_records.zip"
+        with zipfile.ZipFile(zip_path, "w") as zf:
+            zf.writestr("2026-05-20 17-00-00.brc", brc)
+        coord = self._make_coord(tmp_path)
+        results, new_seen = coord._parse_pending_csvs()
+        assert len(results) == 1
+        assert results[0]["obd_trip_avg_rpm"] == 1000

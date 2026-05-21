@@ -1,12 +1,12 @@
-"""OBD coordinator for MyOpel — reads CarScanner CSV exports.
+"""OBD coordinator for MyOpel — reads CarScanner CSV/BRC exports.
 
 Behaviour:
-- Reads every new `*.csv` (and `*.zip` archives containing CSVs) in the
-  configured folder (oldest → newest by filename timestamp), computes trip
-  stats for ALL PIDs found, and persists the result to HA storage.
+- Reads every new `*.csv` / `*.brc` (and `*.zip` archives containing them)
+  in the configured folder (oldest → newest by filename timestamp), computes
+  trip stats for ALL PIDs found, and persists the result to HA storage.
 - Already-processed filenames are remembered so they are never re-parsed,
   even if they reappear inside a new ZIP archive.
-- After a successful parse the CSV / ZIP is deleted (configurable) so files
+- After a successful parse the file / ZIP is deleted (configurable) so files
   don't accumulate.
 - The latest parsed trip survives HA restarts even if the folder is empty.
 - A short history of recent trips is kept in storage for future aggregations.
@@ -19,6 +19,7 @@ import csv
 import logging
 import re
 import shutil
+import struct
 import tempfile
 import zipfile
 from datetime import datetime, timedelta, timezone
@@ -172,6 +173,15 @@ _RBS_FIXES: dict[str, dict[str, float]] = {
         "div": 999.999952502551, "mul": 1.0, "ofs": 0.0,
     },
 }
+
+
+# ── BRC binary format constants ───────────────────────────────────────────────
+# CarScanner binary export (*.brc) — ~4.5× smaller than CSV.
+# Record: 4-byte marker | 8-byte rel_ts (double LE) | 4-byte PID-ID | 8-byte val (double LE)
+# GPS extended records append 28 bytes (4 + 8 lat + 8 lon + 8 alt-secondary) after the 24-byte record.
+# Catalog entries precede data records and use the same RECORD_MARKER for their embedded sample.
+RECORD_MARKER = b"\x50\x43\x27\x01"
+CATALOG_SEP   = b"\x90\x61\xd5\x00"  # separator between consecutive catalog entries
 
 
 def _rbs_swap_value(value: float, div: float, mul: float, ofs: float) -> float:
@@ -432,17 +442,17 @@ class MyOpelObdCoordinator(DataUpdateCoordinator):
         self,
         already_seen: frozenset[str] = frozenset(),
     ) -> tuple[list[dict[str, Any]], set[str]]:
-        """Parse all new CSVs (and ZIPs containing CSVs) in the folder.
+        """Parse all new CSV/BRC files (and ZIPs containing them) in the folder.
 
         Returns (results, new_names) where new_names is the set of filenames
         successfully parsed this run.  Filenames in already_seen are skipped.
-        Raises _NoObdFileYet when the folder contains no CSV/ZIP candidates.
+        Raises _NoObdFileYet when the folder contains no CSV/BRC/ZIP candidates.
         """
         folder = Path(self.folder_path)
         folder.mkdir(parents=True, exist_ok=True)
 
-        # (csv_path, source_zip | None)
-        csv_entries: list[tuple[Path, Path | None]] = []
+        # (file_path, source_zip | None)
+        file_entries: list[tuple[Path, Path | None]] = []
         zip_paths: list[Path] = []
         tmp_dirs: list[str] = []
 
@@ -452,10 +462,14 @@ class MyOpelObdCoordinator(DataUpdateCoordinator):
                     tmp = tempfile.mkdtemp(prefix="myopel_obd_")
                     tmp_dirs.append(tmp)
                     for entry_name in zf.namelist():
-                        if entry_name.lower().endswith(".csv") and not entry_name.startswith("__MACOSX"):
+                        name_lower = entry_name.lower()
+                        if (
+                            (name_lower.endswith(".csv") or name_lower.endswith(".brc"))
+                            and not entry_name.startswith("__MACOSX")
+                        ):
                             try:
                                 zf.extract(entry_name, tmp)
-                                csv_entries.append((Path(tmp) / entry_name, zip_path))
+                                file_entries.append((Path(tmp) / entry_name, zip_path))
                             except Exception as err:  # noqa: BLE001
                                 _LOGGER.warning(
                                     "MyOpel OBD: errore estrazione %s da %s: %s",
@@ -467,46 +481,52 @@ class MyOpelObdCoordinator(DataUpdateCoordinator):
             except Exception as err:  # noqa: BLE001
                 _LOGGER.warning("MyOpel OBD: errore apertura zip %s (%s)", zip_path.name, err)
 
-        for csv_path in folder.glob("*.csv"):
-            csv_entries.append((csv_path, None))
+        for p in folder.glob("*.csv"):
+            file_entries.append((p, None))
+        for p in folder.glob("*.brc"):
+            file_entries.append((p, None))
 
-        if not csv_entries:
+        if not file_entries:
             for tmp in tmp_dirs:
                 shutil.rmtree(tmp, ignore_errors=True)
             raise _NoObdFileYet
 
-        csv_entries.sort(key=lambda e: _csv_recording_key(e[0]))
+        file_entries.sort(key=lambda e: _csv_recording_key(e[0]))
 
         results: list[dict[str, Any]] = []
         new_seen: set[str] = set()
 
         try:
-            for csv_path, zip_source in csv_entries:
-                if csv_path.name in already_seen:
-                    _LOGGER.debug("MyOpel OBD: %s già parsato, ignoro", csv_path.name)
+            for file_path, zip_source in file_entries:
+                if file_path.name in already_seen:
+                    _LOGGER.debug("MyOpel OBD: %s già parsato, ignoro", file_path.name)
                     continue
+                is_brc = file_path.suffix.lower() == ".brc"
                 try:
-                    result = _parse_csv_file(csv_path, self.rbs_fix_pids)
+                    if is_brc:
+                        result = _parse_brc_file(file_path, self.rbs_fix_pids)
+                    else:
+                        result = _parse_csv_file(file_path, self.rbs_fix_pids)
                 except UpdateFailed:
-                    _LOGGER.warning("MyOpel OBD: %s vuoto o malformato, ignoro", csv_path.name)
+                    _LOGGER.warning("MyOpel OBD: %s vuoto o malformato, ignoro", file_path.name)
                     continue
                 except Exception as err:  # noqa: BLE001
                     _LOGGER.warning(
                         "MyOpel OBD: errore parsing %s (%s), file lasciato sul disco",
-                        csv_path.name, err,
+                        file_path.name, err,
                     )
                     continue
 
                 results.append(result)
-                new_seen.add(csv_path.name)
+                new_seen.add(file_path.name)
 
                 if self.delete_after_parse and zip_source is None:
                     try:
-                        csv_path.unlink()
-                        _LOGGER.debug("MyOpel OBD: %s elaborato e rimosso", csv_path.name)
+                        file_path.unlink()
+                        _LOGGER.debug("MyOpel OBD: %s elaborato e rimosso", file_path.name)
                     except OSError as err:
                         _LOGGER.warning(
-                            "MyOpel OBD: impossibile rimuovere %s (%s)", csv_path.name, err,
+                            "MyOpel OBD: impossibile rimuovere %s (%s)", file_path.name, err,
                         )
         finally:
             if self.delete_after_parse:
@@ -561,6 +581,138 @@ def _parse_csv_file(
     if not pids:
         raise UpdateFailed("OBD CSV is empty")
     return _compute_stats(pids, units, path)
+
+
+def _brc_read_ps(data: bytes, pos: int) -> tuple[str, int]:
+    """Read a Pascal-style string: 1-byte length prefix + UTF-8 content."""
+    n = data[pos]
+    return data[pos + 1 : pos + 1 + n].decode("utf-8", errors="replace"), pos + 1 + n
+
+
+def _brc_parse_catalog(data: bytes, start: int) -> dict[bytes, str]:
+    """Parse BRC catalog section → {4-byte pid_id_bytes: full_name}.
+
+    Each catalog entry has:  pid_id(4) + pstring_full + pstring_short + uint32(4)
+    followed by one or more embedded 24-byte data records (same RECORD_MARKER
+    format) and an optional CATALOG_SEP between entries.
+
+    This function only needs to build the pid_id→name map.  The caller is
+    responsible for scanning data records independently (starting from `start`),
+    so imprecise tracking of the catalog end position is harmless.
+    """
+    pid_map: dict[bytes, str] = {}
+    pos = start
+    while pos + 4 <= len(data):
+        if data[pos : pos + 4] == RECORD_MARKER:
+            break
+        pid_id = data[pos : pos + 4]
+        pos += 4
+        try:
+            full_name, pos = _brc_read_ps(data, pos)
+            _short, pos = _brc_read_ps(data, pos)
+        except (IndexError, UnicodeDecodeError):
+            break
+        if not full_name:
+            break
+        pos += 4  # skip uint32
+        pid_map[pid_id] = full_name
+        # Skip embedded record(s) and optional GPS-extra bytes until the next
+        # catalog entry (non-marker) or CATALOG_SEP.
+        while pos + 4 <= len(data):
+            peek = data[pos : pos + 4]
+            if peek == CATALOG_SEP:
+                pos += 4
+                break
+            if peek == RECORD_MARKER:
+                pos += 24  # skip embedded data record
+                # Skip GPS-extended block if the next bytes are not a known marker
+                if pos + 4 <= len(data):
+                    peek2 = data[pos : pos + 4]
+                    if peek2 != RECORD_MARKER and peek2 != CATALOG_SEP:
+                        pos += 28  # 4 + 8 + 8 + 8
+            else:
+                break  # start of next catalog entry
+    return pid_map
+
+
+def _parse_brc_file(
+    path: Path,
+    rbs_fix_pids: list[str] | None = None,
+) -> dict[str, Any]:
+    """Parse a CarScanner BRC binary export.
+
+    Returns the same dict structure as _parse_csv_file (routed through
+    _compute_stats).  PIDs may appear in any order; no order dependency.
+    """
+    data = path.read_bytes()
+    if len(data) < 8:
+        raise UpdateFailed("BRC file too short")
+
+    active_rbs: dict[str, dict[str, float]] = {}
+    if rbs_fix_pids:
+        for pid_name in rbs_fix_pids:
+            if pid_name in _RBS_FIXES:
+                active_rbs[pid_name] = _RBS_FIXES[pid_name]
+
+    # ── Parse fixed header ───────────────────────────────────────────────────
+    pos = 0
+    try:
+        _magic, pos   = _brc_read_ps(data, pos)   # "CARSCANNERRECORD"
+        pos          += 4                           # uint32 version
+        _, pos        = _brc_read_ps(data, pos)    # device id
+        _, pos        = _brc_read_ps(data, pos)    # car name
+        _, pos        = _brc_read_ps(data, pos)    # ECU model
+        _, pos        = _brc_read_ps(data, pos)    # adapter type
+    except (IndexError, UnicodeDecodeError) as err:
+        raise UpdateFailed(f"BRC header parse error: {err}") from err
+
+    # GPS bounding-box section ends with CATALOG_SEP; scan for it rather than
+    # assuming a fixed size (short sessions may have a smaller GPS section).
+    _cs_search_end = min(pos + 512, len(data) - 4)
+    while pos <= _cs_search_end and data[pos : pos + 4] != CATALOG_SEP:
+        pos += 1
+    if pos + 4 <= len(data):
+        pos += 4  # skip past the CATALOG_SEP terminator
+    # else: no CATALOG_SEP found, catalog starts right here (degenerate file)
+
+    # ── Build PID catalog ────────────────────────────────────────────────────
+    catalog_start = pos
+    pid_map = _brc_parse_catalog(data, catalog_start)
+    if not pid_map:
+        raise UpdateFailed("BRC catalog empty — no PIDs found")
+
+    # ── Scan ALL records starting from catalog_start ─────────────────────────
+    # Catalog-embedded records are valid data samples and must be included.
+    # Scanning from catalog_start (not after the last catalog entry) ensures
+    # every embedded sample is captured alongside the regular data records.
+    pids: dict[str, list[tuple[float, float]]] = {}
+    pos = catalog_start
+    end = len(data)
+    while pos + 24 <= end:
+        if data[pos : pos + 4] != RECORD_MARKER:
+            pos += 1
+            continue
+        rel_ts  = struct.unpack_from("<d", data, pos + 4)[0]
+        pid_id  = data[pos + 12 : pos + 16]
+        val     = struct.unpack_from("<d", data, pos + 16)[0]
+        pos    += 24
+        pid_name = pid_map.get(pid_id)
+        if pid_name is not None:
+            if pid_name in active_rbs:
+                fix = active_rbs[pid_name]
+                val = _rbs_swap_value(val, fix["div"], fix["mul"], fix["ofs"])
+            pids.setdefault(pid_name, []).append((rel_ts, val))
+        # Detect GPS-extended record: 28 extra bytes follow when the next 4
+        # bytes are neither RECORD_MARKER nor CATALOG_SEP.
+        if pos + 4 <= end:
+            peek = data[pos : pos + 4]
+            if peek != RECORD_MARKER and peek != CATALOG_SEP:
+                pos += 28
+
+    if not pids:
+        raise UpdateFailed("BRC file contains no data records")
+
+    return _compute_stats(pids, {}, path)
 
 
 def _compute_stats(

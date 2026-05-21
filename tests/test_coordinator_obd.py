@@ -556,6 +556,9 @@ class TestRbsSwapValue:
             "[ECM] Open loop soot load assessment of the diesel particulate filter",
             "[ECM] Soot clogging level of diesel particulate filter",
             "[ECM] Average mileage for the last 10 regenerations",
+            "[ECM] Total mass of additive accumulated in the diesel particulate filter",
+            "[ECM] Mileage remaining before diesel particulate filter replacement",
+            "[ECM] Exhaust gas pressure at the outlet of the particulate filter",
         }
         assert set(_RBS_FIXES.keys()) == expected
 

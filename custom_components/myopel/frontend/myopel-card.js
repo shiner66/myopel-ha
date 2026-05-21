@@ -876,6 +876,8 @@ class MyOpelCard extends LitElement {
       ["obd_autonomia_adblue",            1500,  "Autonomia AdBlue bassa",    500,  "Autonomia AdBlue critica",     "km",  false, 0],
       // Cap. regen. breve: < 50% warn, < 20% alert
       ["obd_cap_rigenerazione_breve",       50,  "Cap. regen. breve ridotta",  20,  "Cap. regen. breve critica",    "%",   false, 1],
+      // Vita residua DPF: < 50000 km warn, < 20000 km alert
+      ["obd_vita_residua_dpf",           50000,  "Sostituzione DPF prossima", 20000, "Sostituzione DPF urgente",    "km",  false, 0],
     ];
     const res = [];
     for (const [sfx, wt, wl, at, al, unit, hisBad, dec] of CHECKS) {
@@ -1395,6 +1397,7 @@ class MyOpelCard extends LitElement {
       ${obdRow("📉","Cap. regen. lunga",      this._fmt("obd_capacita_rigenerazione_dpf"),                "%",  "obd_capacita_rigenerazione_dpf")}
       ${obdRow("📉","Cap. regen. breve",      this._fmt("obd_cap_rigenerazione_breve"),                   "%",  "obd_cap_rigenerazione_breve")}
       ${obdRow("📊","Media km regen DPF",     this._fmt("obd_media_km_regen_dpf","sensor",0),             "km", "obd_media_km_regen_dpf")}
+      ${obdRow("🔧","Vita residua DPF",       this._fmt("obd_vita_residua_dpf","sensor",0),               "km", "obd_vita_residua_dpf")}
       ${obdRow("💧","AdBlue serbatoio",       this._fmt("obd_adblue_nel_serbatoio"),                      "L",  "obd_adblue_nel_serbatoio")}
       ${obdRow("🛣️","Autonomia AdBlue",       this._fmt("obd_autonomia_adblue","sensor",0),               "km", "obd_autonomia_adblue")}
       ${obdRow("🌡️","Gas scarico max",       this._fmt("obd_temp_gas_scarico_max","sensor",0),           "°C", "obd_temp_gas_scarico_max")}

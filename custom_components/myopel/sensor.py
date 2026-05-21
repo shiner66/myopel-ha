@@ -640,6 +640,15 @@ OBD_SENSOR_DESCRIPTIONS: tuple[MyOpelSensorDescription, ...] = (
         icon="mdi:chart-timeline-variant",
     ),
     MyOpelSensorDescription(
+        key="obd_trip_dpf_replace_km",
+        data_key="obd_trip_dpf_replace_km",
+        name="OBD – Vita residua DPF",
+        native_unit_of_measurement=UnitOfLength.KILOMETERS,
+        device_class=SensorDeviceClass.DISTANCE,
+        state_class=SensorStateClass.MEASUREMENT,
+        icon="mdi:filter-remove",
+    ),
+    MyOpelSensorDescription(
         key="obd_trip_adblue_vol_l",
         data_key="obd_trip_adblue_vol_l",
         name="OBD – AdBlue nel serbatoio",

@@ -60,6 +60,7 @@ _PID_MAP: dict[str, tuple[str, str]] = {
     "obd_trip_dpf_regen_capability_st": ("[ECM] Short-term regeneration capability",                      "last"),
     "obd_trip_dpf_since_regen_km":    ("[ECM] Distance traveled since the last regeneration",             "last"),
     "obd_trip_dpf_avg_regen_km":      ("[ECM] Average mileage for the last 10 regenerations",             "last"),
+    "obd_trip_dpf_replace_km":        ("[ECM] Mileage remaining before diesel particulate filter replacement", "last"),
     "obd_trip_adblue_vol_l":          ("[ECM] Volume of urea solution measured in urea tank",             "last"),
     "obd_trip_adblue_range_km":       ("[ECM] Vehicle mileage remaining before filling the tank with urea solution", "last"),
     "obd_trip_exhaust_after_cat_c":   ("[ECM] Exhaust gas temperature after pre-catalytic converter",     "max"),
@@ -92,6 +93,7 @@ _LTS_META: dict[str, tuple[str, str | None]] = {
     "obd_trip_dpf_regen_capability_st":   ("OBD – Cap. rigenerazione breve",     "%"),
     "obd_trip_dpf_since_regen_km":        ("OBD – Distanza ultima rigenerazione", "km"),
     "obd_trip_dpf_avg_regen_km":          ("OBD – Media km rigenerazione DPF",   "km"),
+    "obd_trip_dpf_replace_km":            ("OBD – km rimanenti sostituzione DPF","km"),
     "obd_trip_adblue_vol_l":              ("OBD – AdBlue nel serbatoio",         "L"),
     "obd_trip_adblue_range_km":           ("OBD – Autonomia AdBlue",             "km"),
     "obd_trip_exhaust_after_cat_c":       ("OBD – Temp. gas scarico max",        "°C"),
@@ -136,6 +138,15 @@ _RBS_FIXES: dict[str, dict[str, float]] = {
     },
     "[ECM] Average mileage for the last 10 regenerations": {
         "div": 16.0, "mul": 1.0, "ofs": 0.0,
+    },
+    "[ECM] Total mass of additive accumulated in the diesel particulate filter": {
+        "div": 128.0, "mul": 1.0, "ofs": 0.0,
+    },
+    "[ECM] Mileage remaining before diesel particulate filter replacement": {
+        "div": 1.0, "mul": 16.0, "ofs": 0.0,
+    },
+    "[ECM] Exhaust gas pressure at the outlet of the particulate filter": {
+        "div": 999.999952502551, "mul": 1.0, "ofs": 0.0,
     },
 }
 

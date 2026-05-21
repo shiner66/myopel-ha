@@ -188,6 +188,36 @@ def _rbs_swap_value(value: float, div: float, mul: float, ofs: float) -> float:
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
 
+# Patterns tried in order to extract a recording timestamp from the filename.
+# Each group tuple must be (Y, M, D, H, Min, S).
+_FNAME_DATE_RE = [
+    re.compile(r"(\d{4})(\d{2})(\d{2})[_T](\d{2})(\d{2})(\d{2})"),   # 20260520_183532
+    re.compile(r"(\d{4})-(\d{2})-(\d{2})[ _](\d{2})-(\d{2})-(\d{2})"),# 2026-05-19 21-16-39
+    re.compile(r"(\d{4})-(\d{2})-(\d{2})[T _](\d{2}):(\d{2}):(\d{2})"),# ISO with colons
+]
+
+
+def _csv_recording_key(path: Path) -> tuple[datetime, float]:
+    """Sortable key: (recorded_at_utc, mtime_fallback).
+
+    Tries to extract the recording date from the filename so that files are
+    always processed in strict chronological order regardless of when they
+    were copied to the folder.  Falls back to mtime if no pattern matches.
+    """
+    for pattern in _FNAME_DATE_RE:
+        m = pattern.search(path.stem)
+        if m:
+            try:
+                return (
+                    datetime(int(m.group(1)), int(m.group(2)), int(m.group(3)),
+                             int(m.group(4)), int(m.group(5)), int(m.group(6)),
+                             tzinfo=timezone.utc),
+                    0.0,
+                )
+            except ValueError:
+                pass
+    return (datetime.min.replace(tzinfo=timezone.utc), path.stat().st_mtime)
+
 _SLUG_RE = re.compile(r"[^a-z0-9]+")
 
 
@@ -388,7 +418,7 @@ class MyOpelObdCoordinator(DataUpdateCoordinator):
         folder = Path(self.folder_path)
         folder.mkdir(parents=True, exist_ok=True)
 
-        csvs = sorted(folder.glob("*.csv"), key=lambda p: p.stat().st_mtime)
+        csvs = sorted(folder.glob("*.csv"), key=_csv_recording_key)
         if not csvs:
             raise _NoObdFileYet
 
@@ -547,12 +577,15 @@ def _compute_stats(
         key=lambda x: x[0],
     )
 
+    _regen_enable_vals = _vals("[ECM] Regeneration enable")
     _regen_requested = bool(_regen_status_vals and max(_regen_status_vals) >= 1)
+    # Regeneration enable: if PID absent treat as "don't gate" (not all profiles log it)
+    _regen_enabled   = (not _regen_enable_vals) or max(_regen_enable_vals) >= 1
     _thermal_regen   = bool(
         (_egt_after_vals and max(_egt_after_vals) > 550)
         or (_nox_cat_vals and max(_nox_cat_vals) > 550)
     )
-    _regen_active = _regen_requested and _thermal_regen
+    _regen_active = _regen_requested and _regen_enabled and _thermal_regen
 
     # Within-file detection: distance counter reset (dropped by ≥90% from a
     # non-trivial starting value) signals a completed regeneration.

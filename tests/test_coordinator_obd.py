@@ -13,6 +13,7 @@ from custom_components.myopel.coordinator_obd import (
     _LTS_META,
     _RBS_FIXES,
     _compute_stats,
+    _csv_recording_key,
     _parse_csv_file,
     _rbs_swap_value,
     _slugify_pid,
@@ -648,3 +649,93 @@ class TestRbsIntegration:
         slug = _slugify_pid(pid_name)
         corrected = data["obd_pid_values"][slug]["last"]
         assert corrected == pytest.approx(163.84, rel=1e-4)
+
+
+# ── CSV ordering ──────────────────────────────────────────────────────────────
+
+class TestCsvRecordingKey:
+    def test_yyyymmdd_hhmmss_pattern(self, tmp_path):
+        p = tmp_path / "b0ff-20260520_183532_2.csv"
+        p.touch()
+        dt, _ = _csv_recording_key(p)
+        assert dt.year == 2026 and dt.month == 5 and dt.day == 20
+        assert dt.hour == 18 and dt.minute == 35 and dt.second == 32
+
+    def test_yyyy_mm_dd_space_pattern(self, tmp_path):
+        p = tmp_path / "2026-05-19 21-16-39.csv"
+        p.touch()
+        dt, _ = _csv_recording_key(p)
+        assert dt.year == 2026 and dt.month == 5 and dt.day == 19
+        assert dt.hour == 21 and dt.minute == 16 and dt.second == 39
+
+    def test_mtime_fallback(self, tmp_path):
+        p = tmp_path / "no_date_here.csv"
+        p.touch()
+        dt, mtime = _csv_recording_key(p)
+        from datetime import datetime, timezone
+        assert dt == datetime.min.replace(tzinfo=timezone.utc)
+        assert mtime > 0.0
+
+    def test_ordering_three_files(self, tmp_path):
+        names = [
+            "trip_20260519_211639.csv",
+            "trip_20260520_010121.csv",
+            "trip_20260518_080000.csv",
+        ]
+        for n in names:
+            (tmp_path / n).touch()
+        files = list((tmp_path).glob("*.csv"))
+        ordered = sorted(files, key=_csv_recording_key)
+        stems = [f.stem for f in ordered]
+        assert stems == [
+            "trip_20260518_080000",
+            "trip_20260519_211639",
+            "trip_20260520_010121",
+        ]
+
+
+class TestMultiCsvOrdering:
+    """Multiple CSVs processed in strict chronological order."""
+
+    def test_inter_file_state_chains_in_order(self, tmp_path):
+        # Three trips arriving at once; regen happened between trip 1 and 2.
+        # Trip 1: dist_since_regen = 200 km (pre-regen)
+        # Trip 2: dist_since_regen starts at 0 (post-regen cooldown, EGT high)
+        # Trip 3: dist_since_regen = 30 km (normal)
+        # Expected: trip 2 → post_regen, trip 3 → idle
+
+        def _write(name: str, dist_vals: list[tuple[float, float]],
+                   egt: float = 200.0, regen_status: float = 0.0) -> None:
+            rows = [(float(i), "[ECM] Crankshaft speed", 1000.0, "rpm")
+                    for i in range(len(dist_vals))]
+            rows += [(t, "[ECM] Distance traveled since the last regeneration", v, "km")
+                     for t, v in dist_vals]
+            rows.append((0.0, "[ECM] Exhaust gas temperature after pre-catalytic converter",
+                         egt, "°C"))
+            rows.append((0.0, "[ECM] DPF regeneration status", regen_status, ""))
+            _write_csv(tmp_path, name, rows)
+
+        _write("20260518_080000.csv",
+               [(0.0, 200.0), (5.0, 200.5)], egt=250.0)
+        _write("20260519_090000.csv",
+               [(0.0, 0.0), (5.0, 5.0)],    egt=620.0)   # cooldown after regen
+        _write("20260520_100000.csv",
+               [(0.0, 30.0), (5.0, 32.0)],  egt=200.0)
+
+        hass = MagicMock()
+        hass.async_add_executor_job = lambda func, *a: _run_in_thread(func, *a)
+        coord = MyOpelObdCoordinator(
+            hass, str(tmp_path), scan_interval=60,
+            entry_id="order_ent", delete_after_parse=False,
+        )
+        loop = asyncio.new_event_loop()
+        try:
+            loop.run_until_complete(coord.async_load_persisted())
+            loop.run_until_complete(coord._async_update_data())
+        finally:
+            loop.close()
+
+        states = [t.get("obd_dpf_regen_state") for t in coord._history]
+        assert states[0] == "idle"
+        assert states[1] == "post_regen"
+        assert states[2] == "idle"

@@ -600,10 +600,24 @@ OBD_SENSOR_DESCRIPTIONS: tuple[MyOpelSensorDescription, ...] = (
         icon="mdi:air-filter",
     ),
     MyOpelSensorDescription(
+        key="obd_trip_dpf_closed_soot",
+        data_key="obd_trip_dpf_closed_soot",
+        name="OBD – Soot closed-loop DPF",
+        native_unit_of_measurement="g/L",
+        state_class=SensorStateClass.MEASUREMENT,
+        icon="mdi:smoke",
+    ),
+    MyOpelSensorDescription(
         key="obd_trip_dpf_regen_active",
         data_key="obd_trip_dpf_regen_active",
         name="OBD – DPF rigenerazione attiva",
         icon="mdi:fire",
+    ),
+    MyOpelSensorDescription(
+        key="obd_dpf_regen_state",
+        data_key="obd_dpf_regen_state",
+        name="OBD – Stato rigenerazione DPF",
+        icon="mdi:recycle",
     ),
     MyOpelSensorDescription(
         key="obd_trip_dpf_regen_capability",
@@ -667,6 +681,15 @@ OBD_SENSOR_DESCRIPTIONS: tuple[MyOpelSensorDescription, ...] = (
         icon="mdi:water-percent",
     ),
     MyOpelSensorDescription(
+        key="obd_trip_exhaust_before_cat_c",
+        data_key="obd_trip_exhaust_before_cat_c",
+        name="OBD – Temp. gas scarico pre-cat max",
+        native_unit_of_measurement=UnitOfTemperature.CELSIUS,
+        device_class=SensorDeviceClass.TEMPERATURE,
+        state_class=SensorStateClass.MEASUREMENT,
+        icon="mdi:thermometer-high",
+    ),
+    MyOpelSensorDescription(
         key="obd_trip_exhaust_after_cat_c",
         data_key="obd_trip_exhaust_after_cat_c",
         name="OBD – Temp. gas scarico max",
@@ -674,6 +697,15 @@ OBD_SENSOR_DESCRIPTIONS: tuple[MyOpelSensorDescription, ...] = (
         device_class=SensorDeviceClass.TEMPERATURE,
         state_class=SensorStateClass.MEASUREMENT,
         icon="mdi:thermometer-high",
+    ),
+    MyOpelSensorDescription(
+        key="obd_trip_nox_cat_temp_max_c",
+        data_key="obd_trip_nox_cat_temp_max_c",
+        name="OBD – Temp. cat. NOx max",
+        native_unit_of_measurement=UnitOfTemperature.CELSIUS,
+        device_class=SensorDeviceClass.TEMPERATURE,
+        state_class=SensorStateClass.MEASUREMENT,
+        icon="mdi:thermometer-chevron-up",
     ),
     # ── Diagnostics ──────────────────────────────────────────────────────────
     MyOpelSensorDescription(

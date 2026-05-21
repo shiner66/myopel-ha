@@ -868,8 +868,12 @@ class MyOpelCard extends LitElement {
       ["obd_tensione_avviamento_batteria", 11.5, "Batteria debole",          10.5, "Batteria critica",             "V",   false, 2],
       // Diluizione olio: > 3% warn, > 5% alert
       ["obd_diluizione_olio",               3,  "Diluizione olio elevata",    5,  "Diluizione olio critica",      "%",   true,  1],
-      // Gas scarico pre-cat: > 640°C warn, > 700°C alert (regen può arrivare a 600°C)
+      // EGT pre-cat: > 640°C warn, > 700°C alert
+      ["obd_temp_gas_scarico_pre_cat_max", 640,  "EGT pre-cat elevata",      700,  "EGT pre-cat critica",          "°C",  true,  0],
+      // EGT post-cat: > 640°C warn, > 700°C alert (regen può arrivare a 600°C)
       ["obd_temp_gas_scarico_max",         640,  "Gas scarico elevato",      700,  "Gas scarico critico",          "°C",  true,  0],
+      // NOx cat temp: > 720°C warn, > 780°C alert
+      ["obd_temp_cat_nox_max",             720,  "Cat. NOx temperatura alta", 780,  "Cat. NOx temperatura critica", "°C",  true,  0],
       // AdBlue serbatoio: < 5 L warn, < 2 L alert
       ["obd_adblue_nel_serbatoio",           5,  "AdBlue basso",               2,  "AdBlue quasi esaurito",        "L",   false, 1],
       // AdBlue autonomia: < 1500 km warn, < 500 km alert
@@ -1391,8 +1395,10 @@ class MyOpelCard extends LitElement {
       </div>
 
       <div class="op-section-label" style="margin-top:14px">🌿 Emissioni & DPF</div>
-      ${obdRow("🫧","DPF intasamento",       this._fmt("obd_dpf_intasamento"),                           "%",  "obd_dpf_intasamento")}
-      ${obdRow("🔥","Stato rigenerazione",    this._fmt("obd_dpf_rigenerazione_attiva","sensor",0),       "",   "obd_dpf_rigenerazione_attiva")}
+      ${obdRow("🔄","Stato regen. DPF",      this._fmt("obd_stato_rigenerazione_dpf","sensor",0),        "",   "obd_stato_rigenerazione_dpf")}
+      ${obdRow("🫧","DPF intasamento",        this._fmt("obd_dpf_intasamento"),                           "%",  "obd_dpf_intasamento")}
+      ${obdRow("🌫️","Soot closed-loop",      this._fmt("obd_soot_closed_loop_dpf","sensor",2),           "g/L","obd_soot_closed_loop_dpf")}
+      ${obdRow("🔥","Regen. richiesta",       this._fmt("obd_dpf_rigenerazione_attiva","sensor",0),       "",   "obd_dpf_rigenerazione_attiva")}
       ${obdRow("📏","Dist. ultima regen.",    this._fmt("obd_distanza_ultima_regen","sensor",1),          "km", "obd_distanza_ultima_regen")}
       ${obdRow("📉","Cap. regen. lunga",      this._fmt("obd_capacita_rigenerazione_dpf"),                "%",  "obd_capacita_rigenerazione_dpf")}
       ${obdRow("📉","Cap. regen. breve",      this._fmt("obd_cap_rigenerazione_breve"),                   "%",  "obd_cap_rigenerazione_breve")}
@@ -1400,8 +1406,10 @@ class MyOpelCard extends LitElement {
       ${obdRow("🔧","Vita residua DPF",       this._fmt("obd_vita_residua_dpf","sensor",0),               "km", "obd_vita_residua_dpf")}
       ${obdRow("💧","AdBlue serbatoio",       this._fmt("obd_adblue_nel_serbatoio"),                      "L",  "obd_adblue_nel_serbatoio")}
       ${obdRow("🛣️","Autonomia AdBlue",       this._fmt("obd_autonomia_adblue","sensor",0),               "km", "obd_autonomia_adblue")}
-      ${obdRow("🌡️","Gas scarico max",       this._fmt("obd_temp_gas_scarico_max","sensor",0),           "°C", "obd_temp_gas_scarico_max")}
-      ${obdRow("🛢️","Diluizione olio",       this._fmt("obd_diluizione_olio"),                           "%",  "obd_diluizione_olio")}
+      ${obdRow("🌡️","EGT pre-cat max",       this._fmt("obd_temp_gas_scarico_pre_cat_max","sensor",0),   "°C", "obd_temp_gas_scarico_pre_cat_max")}
+      ${obdRow("🌡️","EGT post-cat max",      this._fmt("obd_temp_gas_scarico_max","sensor",0),           "°C", "obd_temp_gas_scarico_max")}
+      ${obdRow("🌡️","Cat. NOx max",          this._fmt("obd_temp_cat_nox_max","sensor",0),               "°C", "obd_temp_cat_nox_max")}
+      ${obdRow("🛢️","Diluizione olio",        this._fmt("obd_diluizione_olio"),                           "%",  "obd_diluizione_olio")}
 
       <div class="op-section-label" style="margin-top:14px">🔋 Elettrico & motore</div>
       ${obdRow("⚡","Tensione avviamento",   this._fmt("obd_tensione_avviamento_batteria","sensor",2),   "V",  "obd_tensione_avviamento_batteria")}

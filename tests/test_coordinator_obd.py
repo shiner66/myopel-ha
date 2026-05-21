@@ -62,6 +62,38 @@ class TestComputeStats:
         assert result["obd_trip_max_rpm"] == 4000
         assert result["obd_trip_distance_km"] == 12.3
 
+    def test_ecm_pid_name_fallback(self, tmp_path):
+        """ECM English names work when Italian generic names absent (new CSV format)."""
+        pids = {
+            "[ECM] Crankshaft speed": [(0.0, 800.0), (1.0, 4000.0), (2.0, 2500.0)],
+            "[ECM] Coolant temperature, corrected": [(0.0, 75.0), (1.0, 90.0)],
+            "[ECM] Outside air temperature": [(0.0, 18.0)],
+        }
+        result = _compute_stats(pids, {}, tmp_path / "x.csv")
+        assert result["obd_trip_avg_rpm"] == int((800 + 4000 + 2500) / 3)
+        assert result["obd_trip_max_rpm"] == 4000
+        assert result["obd_trip_coolant_temp_max_c"] == 90.0
+        assert result["obd_trip_air_temp_c"] == 18.0
+
+    def test_odometer_distance_fallback(self, tmp_path):
+        """Trip distance computed from odometer when Distanza percorsa: absent."""
+        pids = {
+            "[ECM] Crankshaft speed": [(0.0, 800.0), (10.0, 900.0)],
+            "[ECM] Total mileage": [(0.0, 17140.0), (5.0, 17145.0), (10.0, 17151.0)],
+        }
+        result = _compute_stats(pids, {}, tmp_path / "x.csv")
+        assert result["obd_trip_distance_km"] == pytest.approx(11.0, rel=1e-3)
+
+    def test_odometer_distance_not_overrides_existing(self, tmp_path):
+        """When Distanza percorsa: IS present, odometer fallback does not overwrite."""
+        pids = {
+            "Giri motore": [(0.0, 800.0)],
+            "Distanza percorsa:": [(0.0, 0.0), (1.0, 7.5)],
+            "[ECM] Total mileage": [(0.0, 17140.0), (1.0, 17151.0)],
+        }
+        result = _compute_stats(pids, {}, tmp_path / "x.csv")
+        assert result["obd_trip_distance_km"] == pytest.approx(7.5, rel=1e-3)
+
     def test_unknown_pid_lands_in_obd_pid_values(self, tmp_path):
         pids = {
             # engine-on window spans 0..2 seconds via the anchor PID

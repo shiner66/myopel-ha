@@ -33,47 +33,61 @@ from .const import (
 _LOGGER = logging.getLogger(__name__)
 
 # PIDs used to determine the engine-on window (reliable OBD, not GPS).
-# First match wins.
-_ENGINE_ANCHOR_PIDS = ("Giri motore", "Distanza percorsa:", "Velocità veicolo")
+# First match wins. ECM profile names listed after Italian generic names.
+_ENGINE_ANCHOR_PIDS = (
+    "Giri motore",
+    "[ECM] Crankshaft speed",
+    "Velocità veicolo",
+    "[ECM] Vehicle speed",
+    "Distanza percorsa:",
+)
 
 # Curated "preset" PIDs that get well-known sensor keys. Other PIDs are exposed
 # under a slugified key (see `_slugify_pid`) and only become sensors if the user
 # enables them from the options flow.
-#   coordinator data key → (PID name in CSV, aggregation, unit hint)
+#   coordinator data key → (PID name(s) in CSV, aggregation)
+# A tuple of names means "try in order, use first found" — supports both
+# Italian generic OBD2 names and English ECM profile names.
 # aggregations: "last", "max", "min", "mean", "first"
-_PID_MAP: dict[str, tuple[str, str]] = {
+_PID_MAP: dict[str, tuple[str | tuple[str, ...], str]] = {
     # ── Basic trip ────────────────────────────────────────────────────────────
     "obd_trip_distance_km":           ("Distanza percorsa:",                                              "last"),
     "obd_trip_avg_speed_kmh":         ("Velocità (GPS)",                                                  "mean"),
     "obd_trip_max_speed_kmh":         ("Velocità (GPS)",                                                  "max"),
     # ── Engine ───────────────────────────────────────────────────────────────
-    "obd_trip_avg_rpm":               ("Giri motore",                                                     "mean"),
-    "obd_trip_max_rpm":               ("Giri motore",                                                     "max"),
-    "obd_trip_coolant_temp_max_c":    ("Temperatura liquido raffreddamento motore",                       "max"),
-    "obd_trip_oil_temp_max_c":        ("[ECM] Oil temperature",                                           "max"),
-    "obd_trip_odometer_km":           ("[ECM] Total mileage",                                             "last"),
-    "obd_trip_air_temp_c":            ("Temperatura d'aria ambiente",                                     "first"),
+    "obd_trip_avg_rpm":               (("Giri motore", "[ECM] Crankshaft speed"),                        "mean"),
+    "obd_trip_max_rpm":               (("Giri motore", "[ECM] Crankshaft speed"),                        "max"),
+    "obd_trip_coolant_temp_max_c":    (("Temperatura liquido raffreddamento motore",
+                                        "[ECM] Coolant temperature, corrected"),                          "max"),
+    "obd_trip_oil_temp_max_c":        ("[ECM] Oil temperature",                                          "max"),
+    "obd_trip_odometer_km":           ("[ECM] Total mileage",                                            "last"),
+    "obd_trip_air_temp_c":            (("Temperatura d'aria ambiente", "[ECM] Outside air temperature"), "first"),
     # ── DPF / emissions ──────────────────────────────────────────────────────
-    "obd_trip_dpf_soot_pct":          ("[ECM] Soot clogging level of diesel particulate filter",          "last"),
-    "obd_trip_dpf_regen_active":      ("[ECM] DPF regeneration status",                                   "max"),
-    "obd_trip_dpf_regen_capability":  ("[ECM] Long-term regeneration capability",                         "last"),
-    "obd_trip_dpf_regen_capability_st": ("[ECM] Short-term regeneration capability",                      "last"),
-    "obd_trip_dpf_since_regen_km":    ("[ECM] Distance traveled since the last regeneration",             "last"),
-    "obd_trip_dpf_avg_regen_km":      ("[ECM] Average mileage for the last 10 regenerations",             "last"),
+    "obd_trip_dpf_soot_pct":          ("[ECM] Soot clogging level of diesel particulate filter",         "last"),
+    "obd_trip_dpf_closed_soot":       ("[ECM] Closed loop soot load assessment of the diesel particulate filter", "last"),
+    "obd_trip_dpf_regen_active":      ("[ECM] DPF regeneration status",                                  "max"),
+    "obd_trip_dpf_regen_enable":      ("[ECM] Regeneration enable",                                      "max"),
+    "obd_trip_dpf_regen_capability":  ("[ECM] Long-term regeneration capability",                        "last"),
+    "obd_trip_dpf_regen_capability_st": ("[ECM] Short-term regeneration capability",                     "last"),
+    "obd_trip_dpf_since_regen_km":    ("[ECM] Distance traveled since the last regeneration",            "last"),
+    "obd_trip_dpf_avg_regen_km":      ("[ECM] Average mileage for the last 10 regenerations",            "last"),
     "obd_trip_dpf_replace_km":        ("[ECM] Mileage remaining before diesel particulate filter replacement", "last"),
-    "obd_trip_adblue_vol_l":          ("[ECM] Volume of urea solution measured in urea tank",             "last"),
+    "obd_trip_adblue_vol_l":          ("[ECM] Volume of urea solution measured in urea tank",            "last"),
     "obd_trip_adblue_range_km":       ("[ECM] Vehicle mileage remaining before filling the tank with urea solution", "last"),
-    "obd_trip_exhaust_after_cat_c":   ("[ECM] Exhaust gas temperature after pre-catalytic converter",     "max"),
+    "obd_trip_exhaust_before_cat_c":  ("[ECM] Exhaust gas temperature before pre-catalytic converter",  "max"),
+    "obd_trip_exhaust_after_cat_c":   ("[ECM] Exhaust gas temperature after pre-catalytic converter",   "max"),
+    "obd_trip_nox_cat_temp_max_c":    ("[ECM] Temperature of the NOx catalytic converter",              "max"),
     # ── Diagnostics ──────────────────────────────────────────────────────────
-    "obd_trip_battery_startup_v":     ("[ECM] Minimum battery voltage at startup",                        "last"),
-    "obd_trip_oil_dilution_pct":      ("[ECM] Evaluation of the degree of dilution of motor oil",         "last"),
+    "obd_trip_battery_startup_v":     ("[ECM] Minimum battery voltage at startup",                       "last"),
+    "obd_trip_oil_dilution_pct":      ("[ECM] Evaluation of the degree of dilution of motor oil",        "last"),
     "obd_trip_ss_state":              ("[ECM] Stop and Start function state",                             "last"),
 }
 
 # Reverse lookup: PID name → list of (data_key, agg)
 _NAME_TO_KEYS: dict[str, list[tuple[str, str]]] = {}
-for _k, (_n, _a) in _PID_MAP.items():
-    _NAME_TO_KEYS.setdefault(_n, []).append((_k, _a))
+for _k, (_pid_spec, _a) in _PID_MAP.items():
+    for _n in ((_pid_spec,) if isinstance(_pid_spec, str) else _pid_spec):
+        _NAME_TO_KEYS.setdefault(_n, []).append((_k, _a))
 
 # LTS metadata for curated sensors: key → (display name, unit).
 # Keys absent from this dict are skipped (boolean labels, odometer).
@@ -96,7 +110,10 @@ _LTS_META: dict[str, tuple[str, str | None]] = {
     "obd_trip_dpf_replace_km":            ("OBD – km rimanenti sostituzione DPF","km"),
     "obd_trip_adblue_vol_l":              ("OBD – AdBlue nel serbatoio",         "L"),
     "obd_trip_adblue_range_km":           ("OBD – Autonomia AdBlue",             "km"),
+    "obd_trip_dpf_closed_soot":           ("OBD – Soot closed-loop DPF",         "g/L"),
+    "obd_trip_exhaust_before_cat_c":      ("OBD – Temp. gas scarico pre-cat max","°C"),
     "obd_trip_exhaust_after_cat_c":       ("OBD – Temp. gas scarico max",        "°C"),
+    "obd_trip_nox_cat_temp_max_c":        ("OBD – Temp. cat. NOx max",           "°C"),
     "obd_trip_battery_startup_v":         ("OBD – Tensione avviamento batteria", "V"),
     "obd_trip_oil_dilution_pct":          ("OBD – Diluizione olio",              "%"),
 }
@@ -276,10 +293,13 @@ class MyOpelObdCoordinator(DataUpdateCoordinator):
             # Computed keys (e.g. fuel totals) are not in _PID_MAP so fall back
             # to the curated scalar for all three stat fields.
             pid_name_agg = _PID_MAP.get(sensor_key)
-            pid_stats = (
-                pid_values.get(_slugify_pid(pid_name_agg[0])) or {}
-                if pid_name_agg else {}
-            )
+            if pid_name_agg:
+                _pid_spec = pid_name_agg[0]
+                # _pid_spec may be str or tuple[str, ...]; use first name for slug
+                _pid_primary = _pid_spec if isinstance(_pid_spec, str) else _pid_spec[0]
+                pid_stats = pid_values.get(_slugify_pid(_pid_primary)) or {}
+            else:
+                pid_stats = {}
             v = float(value)
             mean = pid_stats.get("mean", v)
             min_val = pid_stats.get("min", v)
@@ -311,6 +331,23 @@ class MyOpelObdCoordinator(DataUpdateCoordinator):
 
         if not parsed:
             return self._latest
+
+        # Inter-file regen detection: if the first "distance since regen" value
+        # in this trip is less than the last known value, a regen occurred between
+        # log files (or was already completed when recording started).
+        _dist_slug = _slugify_pid("[ECM] Distance traveled since the last regeneration")
+        _prev_dist = self._latest.get("obd_trip_dpf_since_regen_km")
+        for trip in parsed:
+            _pid_stats = trip.get("obd_pid_values", {}).get(_dist_slug, {})
+            _trip_first_dist = _pid_stats.get("first")
+            if (
+                _prev_dist is not None
+                and _trip_first_dist is not None
+                and _trip_first_dist < _prev_dist * 0.5
+                and trip.get("obd_dpf_regen_state") in ("idle", "post_regen")
+            ):
+                trip["obd_dpf_regen_state"] = "post_regen"
+            _prev_dist = trip.get("obd_trip_dpf_since_regen_km", _prev_dist)
 
         # Update history + latest + pid catalog; inject LTS while obd_pid_values
         # is still present (before the catalog pop strips the per-trip dicts).
@@ -452,8 +489,13 @@ def _compute_stats(
 
     # ── Curated sensor values ────────────────────────────────────────────────
     _SOOT_MAX = 150.0
-    for key, (pid_name, agg) in _PID_MAP.items():
-        vals = _vals(pid_name)
+    for key, (pid_spec, agg) in _PID_MAP.items():
+        pid_names = (pid_spec,) if isinstance(pid_spec, str) else pid_spec
+        vals: list[float] = []
+        for pid_name in pid_names:
+            vals = _vals(pid_name)
+            if vals:
+                break
         if not vals:
             result[key] = None
             continue
@@ -463,6 +505,16 @@ def _compute_stats(
                 result[key] = None
                 continue
         result[key] = round(_aggregate(vals, agg), 2 if key.endswith("_km") else 1)
+
+    # Odometer-based trip distance fallback: when "Distanza percorsa:" is absent
+    # (which is the common case), derive trip distance from first↔last odometer.
+    if result.get("obd_trip_distance_km") is None:
+        odo_recs = pids.get("[ECM] Total mileage", [])
+        odo_in_window = [(s, v) for s, v in odo_recs if t_start <= s <= (t_end or s)]
+        if len(odo_in_window) >= 2:
+            odo_delta = odo_in_window[-1][1] - odo_in_window[0][1]
+            if odo_delta >= 0:
+                result["obd_trip_distance_km"] = round(odo_delta, 2)
 
     # ── Fuel consumption via trapezoid integration ────────────────────────────
     _FUEL_PID = "Consumo istantaneo di carburante calcolato"
@@ -480,6 +532,61 @@ def _compute_stats(
     for k in ("obd_trip_odometer_km", "obd_trip_avg_rpm", "obd_trip_max_rpm"):
         if result.get(k) is not None:
             result[k] = int(result[k])
+
+    # ── DPF regeneration state inference ────────────────────────────────────
+    # Based on real log analysis: combining regen_status, EGT and soot readings
+    # is more reliable than any single PID.
+    _regen_status_vals = _vals("[ECM] DPF regeneration status")
+    _egt_after_vals    = _vals("[ECM] Exhaust gas temperature after pre-catalytic converter")
+    _nox_cat_vals      = _vals("[ECM] Temperature of the NOx catalytic converter")
+    _soot_closed_vals  = _vals("[ECM] Closed loop soot load assessment of the diesel particulate filter")
+    # Use ALL recs for dist-since-regen, not just the window: the very first
+    # reading may arrive before the Crankshaft anchor locks in the window.
+    _dist_regen_recs   = sorted(
+        pids.get("[ECM] Distance traveled since the last regeneration", []),
+        key=lambda x: x[0],
+    )
+
+    _regen_requested = bool(_regen_status_vals and max(_regen_status_vals) >= 1)
+    _thermal_regen   = bool(
+        (_egt_after_vals and max(_egt_after_vals) > 550)
+        or (_nox_cat_vals and max(_nox_cat_vals) > 550)
+    )
+    _regen_active = _regen_requested and _thermal_regen
+
+    # Within-file detection: distance counter reset (dropped by ≥90% from a
+    # non-trivial starting value) signals a completed regeneration.
+    _dist_reset_in_trip = False
+    if len(_dist_regen_recs) >= 2:
+        _d_first = _dist_regen_recs[0][1]
+        if _d_first > 20:
+            for _, _dv in _dist_regen_recs[1:]:
+                if _dv < _d_first * 0.1:
+                    _dist_reset_in_trip = True
+                    break
+
+    _soot_end = _soot_closed_vals[-1] if _soot_closed_vals else None
+    _dist_end = _dist_regen_recs[-1][1] if _dist_regen_recs else None
+
+    # Detect post-regen cooldown that started before recording: dist counter
+    # opens at 0 (or near-0) and EGT is still high → regen completed just
+    # before this log began. Works even when RBS correction is disabled.
+    _cooldown_started = (
+        bool(_dist_regen_recs) and _dist_regen_recs[0][1] < 1.0
+        and _thermal_regen and not _regen_requested
+    )
+
+    if _regen_active and (_dist_reset_in_trip or (_soot_end is not None and _soot_end <= 0.5)):
+        _regen_state = "completed"
+    elif _regen_active:
+        _regen_state = "active"
+    elif _regen_requested and not _thermal_regen:
+        _regen_state = "requested"
+    elif (_dist_end is not None and _dist_end < 20 and not _regen_active) or _cooldown_started:
+        _regen_state = "post_regen"
+    else:
+        _regen_state = "idle"
+    result["obd_dpf_regen_state"] = _regen_state
 
     # ── Generic stats for every PID (slug-keyed) ─────────────────────────────
     pid_catalog: dict[str, dict[str, Any]] = {}

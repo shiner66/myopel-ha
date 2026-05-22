@@ -2,7 +2,7 @@
 
 **Vehicle:** Peugeot (ECU: MD1CS003, 1.5 BlueHDi)
 **Adapter:** BTLE IOS-Vlink
-**App:** CarScanner
+**Apps:** CarScanner (OBD) + MyOpel (Stellantis)
 **Date of last analysis:** 2026-05-22
 **Branch:** `claude/evaluate-brc-format-XHYLG`
 
@@ -13,15 +13,16 @@
 1. [Data Sources](#1-data-sources)
 2. [CSV Format Specification](#2-csv-format-specification)
 3. [BRC Binary Format Specification](#3-brc-binary-format-specification)
-4. [Parsed Trip Data Schema](#4-parsed-trip-data-schema)
-5. [Per-PID Statistics Schema](#5-per-pid-statistics-schema)
-6. [RBS Byte-Swap Correction](#6-rbs-byte-swap-correction)
-7. [DPF State Machine](#7-dpf-state-machine)
-8. [GPS Data](#8-gps-data)
-9. [Full PID Reference](#9-full-pid-reference)
-10. [AI Insight Engine](#10-ai-insight-engine)
-11. [GPS Map Feature](#11-gps-map-feature)
-12. [Platform Architecture](#12-platform-architecture)
+4. [MyOpel Export Format (.myop)](#4-myopel-export-format-myop)
+5. [Parsed OBD Trip Data Schema](#5-parsed-obd-trip-data-schema)
+6. [Per-PID Statistics Schema](#6-per-pid-statistics-schema)
+7. [RBS Byte-Swap Correction](#7-rbs-byte-swap-correction)
+8. [DPF State Machine](#8-dpf-state-machine)
+9. [GPS Data](#9-gps-data)
+10. [Full PID Reference](#10-full-pid-reference)
+11. [AI Insight Engine](#11-ai-insight-engine)
+12. [GPS Map Feature](#12-gps-map-feature)
+13. [Platform Architecture & HA Integration Strategy](#13-platform-architecture--ha-integration-strategy)
 
 ---
 
@@ -216,7 +217,150 @@ def parse_brc(data: bytes) -> dict[bytes, list[tuple[float, float]]]:
 
 ---
 
-## 4. Parsed Trip Data Schema
+## 4. MyOpel Export Format (.myop)
+
+### What it is
+
+The **MyOpel app** (Stellantis official) periodically emails the vehicle owner a
+cumulative snapshot of all trips as a `.myop` file attachment. This is the
+**official Stellantis data channel** — separate from CarScanner/OBD2, uses the
+factory telematics unit (TCU) via the Stellantis cloud.
+
+Key characteristic: **each email contains ALL trips since ever**, not just new
+ones. This is a cumulative snapshot, not a delta. The latest file supersedes all
+older ones (same trip IDs).
+
+### Delivery pipeline
+
+```
+Vehicle TCU → Stellantis cloud → MyOpel mobile app → "Share" → Email
+                                                    → iOS Shortcuts → trips.json / trips.export
+                                                    → IMAP auto-download → .myop file
+```
+
+In the HA integration: an IMAP fetcher (with IDLE push support) watches the
+inbox for emails from the Stellantis sender address and saves the `.myop`
+attachment to the configured folder.
+
+### File format
+
+A `.myop` file is **plain JSON** with `.myop` extension (rename to `.json` to
+inspect). Structure:
+
+```json
+[
+  {
+    "vin": "VF3XXXXXXXXXXXXXXX",
+    "trips": [
+      {
+        "id": 42,
+        "start": {
+          "date": "2026-05-20T07:45:00Z",
+          "mileage": 17050
+        },
+        "end": {
+          "date": "2026-05-20T08:10:00Z",
+          "mileage": 17062
+        },
+        "distance": 12.0,
+        "travelTime": 1500,
+        "fuelLevel": 55,
+        "fuelAutonomy": 420,
+        "fuelConsumption": 532536,
+        "priceFuel": 1.89,
+        "alerts": [27, 52],
+        "daysUntilNextMaintenance": 180,
+        "distanceToNextMaintenance": 12000,
+        "maintenancePassed": false
+      }
+    ]
+  }
+]
+```
+
+### Field reference
+
+| Field | Type | Unit / Notes |
+|-------|------|--------------|
+| `vin` | string | Full VIN (17 chars) |
+| `trips[].id` | int | Stellantis-internal trip ID (monotonic) |
+| `start.date` | string | ISO 8601 with `Z` suffix — **CAUTION: actually CET/CEST local time**, not UTC. Stellantis server bug. |
+| `start.mileage` | int | Odometer at trip start (km) |
+| `end.date` | string | ISO 8601 — same timezone caveat as start |
+| `end.mileage` | int | Odometer at trip end (km) |
+| `distance` | float | Trip distance (km) |
+| `travelTime` | int | Trip duration (seconds) |
+| `fuelLevel` | int | Tank fill % at trip end |
+| `fuelAutonomy` | int | Estimated remaining range (km) |
+| `fuelConsumption` | int | **Proprietary Stellantis unit** — divide by 1,000,000 → litres |
+| `priceFuel` | float | Fuel price at time of trip (€/L, set manually in app) |
+| `alerts` | list[int] | Vehicle alert codes fired during the trip (see §Alert codes) |
+| `daysUntilNextMaintenance` | int | Days until next scheduled service |
+| `distanceToNextMaintenance` | int | km until next scheduled service |
+| `maintenancePassed` | bool | True if maintenance is overdue |
+
+### fuelConsumption unit — verified calibration
+
+```
+Trip: 2026-03-20, 11.9 km
+Raw: fuelConsumption = 532536
+Calculated: 532536 / 1,000,000 = 0.5326 L
+App display: "0.5 L" (22.3 km/L) ✓
+```
+
+### Timestamp timezone caveat
+
+The `Z` suffix implies UTC, but Stellantis servers stamp values in Italian local
+time (CET = UTC+1 in winter, CEST = UTC+2 in summer) without adjusting for DST.
+The HA integration applies a configurable offset (`CONF_TIME_OFFSET`, default = 1).
+For a standalone platform: subtract 1 hour (winter) or 2 hours (summer) from all
+trip timestamps to get true UTC.
+
+### Alert codes (subset)
+
+| Code | Description |
+|------|-------------|
+| 0 | Pressione olio motore anomala |
+| 1 | Temperatura motore troppo elevata |
+| 8 | Livello olio motore insufficiente |
+| 17 | Anomalia ESP / ASR |
+| 20 | Anomalia del filtro gasolio |
+| 22 | Livello carburante basso |
+| 25 | Anomalia del sistema antinquinamento |
+| 26 | Anomalia ABS |
+| 27 | **Rischio di intasamento del filtro antiparticolato (FAP)** |
+| 29 | Livello additivo filtro antiparticolato insufficiente |
+| 46 | Livello liquido lavacristalli insufficiente |
+| 52 | Pressione pneumatico/i insufficiente |
+| 57 | Modalità elettrica non disponibile: rigenerazione FAP in corso |
+| 59–62 | Pressione pneumatico insufficiente (singola ruota) |
+
+Full table: 100+ codes in `alerts.py`.
+
+### Computed fields (derived in HA integration)
+
+| Derived key | Formula |
+|-------------|---------|
+| `fuel_consumption_l` | `fuelConsumption / 1_000_000` |
+| `fuel_consumption_kmpl` | `distance / fuel_consumption_l` |
+| `last_trip_avg_speed` | `distance / (travelTime / 3600)` |
+| `last_trip_cost` | `fuel_consumption_l × priceFuel` |
+| Monthly / today / refueling aggregates | sum/mean over filtered subsets |
+
+### What .myop does NOT contain
+
+- GPS track (no lat/lon for individual trip waypoints)
+- Engine RPM, temperatures, DPF state, or any ECU-level OBD PIDs
+- Instantaneous sensor readings (snapshot only: fuel level, alerts)
+- Precise trip start/end times at second resolution (rounded to minute)
+
+This is why CarScanner CSV/BRC is the complementary source: `.myop` gives
+**what** happened (fuel used, distance, alerts), OBD gives **how** it happened
+(temperature curves, DPF soot trajectory, regen events).
+
+---
+
+## 5. Parsed OBD Trip Data Schema
 
 Output of `_compute_stats` / `_parse_csv_file` / `_parse_brc_file`. All fields
 in the top-level dict:
@@ -275,7 +419,7 @@ in the top-level dict:
 
 ---
 
-## 5. Per-PID Statistics Schema
+## 6. Per-PID Statistics Schema
 
 `trip["obd_pid_values"][slug]` — where `slug = _slugify_pid(pid_name)`:
 
@@ -325,7 +469,7 @@ Examples:
 
 ---
 
-## 6. RBS Byte-Swap Correction
+## 7. RBS Byte-Swap Correction
 
 ### Background
 
@@ -390,7 +534,7 @@ This is safe for users on other ECUs/profiles where the bug does not exist.
 
 ---
 
-## 7. DPF State Machine
+## 8. DPF State Machine
 
 ### Input PIDs
 
@@ -455,7 +599,7 @@ trip's regen state is `idle` or `post_regen`, the new trip state is forced to
 
 ---
 
-## 8. GPS Data
+## 9. GPS Data
 
 ### CSV source (primary, reliable)
 
@@ -525,7 +669,7 @@ Center:    40.572°N, 14.854°E  (Salerno area)
 
 ---
 
-## 9. Full PID Reference
+## 10. Full PID Reference
 
 ### Curated PIDs (always extracted)
 
@@ -613,7 +757,7 @@ Selected from the 202 ECM PIDs observed in real logs:
 
 ---
 
-## 10. AI Insight Engine
+## 11. AI Insight Engine
 
 ### Architecture overview
 
@@ -824,7 +968,7 @@ class Insight:
 
 ---
 
-## 11. GPS Map Feature
+## 12. GPS Map Feature
 
 ### Data pipeline
 
@@ -964,83 +1108,410 @@ For the full platform: MapLibre GL JS with a `TripsLayer` for replay and
 
 ---
 
-## 12. Platform Architecture
+## 13. Platform Architecture & HA Integration Strategy
 
-### Deployment options
+### The core question: standalone platform vs. HA-native
 
-| Option | Best for |
-|--------|---------|
-| **Standalone web app** (FastAPI + React) | Full feature set, any device |
-| **HA dashboard panel** (custom panel) | Embedded in existing HA install |
-| **Progressive Web App** | Mobile-first, offline capable |
+The integration currently lives entirely inside Home Assistant as a custom
+component. The alternative is a **standalone platform** (FastAPI + web UI) that
+exposes selected sensors back to HA via a lightweight channel.
 
-### Recommended stack
+#### Option A — Keep everything in HA (current approach)
 
 ```
-┌─────────────────────────────────────────────────────┐
-│  Frontend (React / Vue + MapLibre GL JS)             │
-│  - Trip list with timeline                           │
-│  - GPS map with PID overlay + event markers          │
-│  - Insight cards (per-trip + trend)                  │
-│  - PID explorer (search + sparklines)                │
-└───────────────────┬────────────────────────────────┘
-                    │ REST / WebSocket
-┌───────────────────▼────────────────────────────────┐
-│  Backend (FastAPI / Python)                          │
-│  - File watcher: drop CSV/BRC into folder           │
-│  - Parser layer: _parse_csv_file / _parse_brc_file  │
-│  - Storage layer: SQLite or TimescaleDB             │
-│  - Insight engine: rules + trend analyzers          │
-│  - GPS endpoint: GeoJSON trip features              │
-│  - PID time-series endpoint                         │
-└───────────────────┬────────────────────────────────┘
-                    │
-┌───────────────────▼────────────────────────────────┐
-│  Storage                                             │
-│  - trips table: one row per file (all curated keys) │
-│  - pid_samples table: (trip_id, slug, ts, value)    │
-│  - insights table: Insight dataclass serialized     │
-│  - gps_tracks table: (trip_id, ts, lat, lon)        │
-└────────────────────────────────────────────────────┘
+CarScanner CSV/BRC ──→  HA OBD coordinator  ──→  HA sensor entities
+MyOpel .myop        ──→  HA main coordinator ──→  HA sensor entities
+                                               ──→  Lovelace card (custom JS)
 ```
 
-### Storage schema (SQLite)
+**Pros:** Single codebase, HA automations work natively (DPF alert → push
+notification), persists through reboots, no extra service to run.
+
+**Cons:** HA entity model is flat and stateless — no GPS map, no cross-trip
+trend charts, no AI insight card that goes beyond what Lovelace can render.
+UI customisation is limited to Lovelace YAML + custom cards.
+
+#### Option B — Standalone platform + MQTT bridge to HA ✓ Recommended
+
+```
+CarScanner CSV/BRC ──→  Standalone backend ──→  SQLite (full history)
+MyOpel .myop        ──→  (FastAPI + Python)  ──→  GPS map + PID overlay
+                         │                    ──→  AI insight engine
+                         │ MQTT autodiscovery
+                         ▼
+                    HA MQTT broker  ──→  HA sensor entities (auto-discovered)
+                                    ──→  HA automations (DPF alert → notify)
+                                    ──→  HA Energy/LTS dashboard
+```
+
+This is **strictly better** than option A for the rich-UI features you want.
+The MQTT bridge means HA **still** gets all its sensors — with autodiscovery,
+they appear automatically in the HA entity registry with zero config. You keep
+all HA automations while the platform adds what HA can't do: GPS map, trend
+charts, AI insights.
+
+#### Option C — Sidecar sharing HA's storage (avoid)
+
+Reading HA's internal `.storage/` JSON from outside HA is fragile — the format
+is undocumented, locks can corrupt it, and HA updates can silently break parsers.
+Don't do this.
+
+---
+
+### Recommended architecture: standalone + MQTT
+
+```
+┌──────────────────────────────────────────────────────────┐
+│  Web App (React/Vue + MapLibre GL JS)                    │
+│  - Trip timeline + detail cards                          │
+│  - GPS map with PID overlay, time-sync slider            │
+│  - AI insight cards (per-trip + cross-trip)              │
+│  - PID explorer, sparklines, trend charts                │
+└──────────────────────┬───────────────────────────────────┘
+                       │ REST + WebSocket
+┌──────────────────────▼───────────────────────────────────┐
+│  Backend (FastAPI / Python)                               │
+│  ┌─────────────────────────────────────────────────────┐ │
+│  │  Ingestion layer                                     │ │
+│  │  - File watcher (watchdog): CSV, BRC, .myop          │ │
+│  │  - IMAP fetcher (clone of imap_fetcher.py)           │ │
+│  │  - Parser: _parse_csv_file / _parse_brc_file / myop  │ │
+│  └──────────────────────┬──────────────────────────────┘ │
+│  ┌───────────────────────▼──────────────────────────────┐ │
+│  │  Analysis layer                                       │ │
+│  │  - RBS correction, DPF state machine                  │ │
+│  │  - AI insight engine (per-trip + trend rules)         │ │
+│  │  - GPS track builder                                  │ │
+│  └──────────────────────┬──────────────────────────────┘ │
+│  ┌───────────────────────▼──────────────────────────────┐ │
+│  │  MQTT publisher (paho-mqtt or aiomqtt)                │ │
+│  │  - Publishes HA MQTT autodiscovery config on start    │ │
+│  │  - Publishes sensor state updates after each parse    │ │
+│  └──────────────────────────────────────────────────────┘ │
+└──────────────────────────────────────────────────────────┘
+                       │ MQTT
+┌──────────────────────▼───────────────────────────────────┐
+│  Home Assistant                                           │
+│  - MQTT integration (built-in, already common)           │
+│  - Auto-discovered sensors: DPF soot, AdBlue, EGT...     │
+│  - Automations: DPF alert → mobile push notification      │
+│  - Energy dashboard: fuel consumption over time           │
+└──────────────────────────────────────────────────────────┘
+```
+
+---
+
+### MQTT autodiscovery — how it works
+
+HA's MQTT integration supports **autodiscovery**: publishing a config payload to
+a specific topic causes HA to create the sensor entity automatically, with no
+YAML configuration needed.
+
+```python
+import json
+import paho.mqtt.client as mqtt
+
+HA_DISCOVERY_PREFIX = "homeassistant"
+DEVICE_ID = "myopel_obd"
+
+def publish_sensor_discovery(client: mqtt.Client, key: str, name: str,
+                              unit: str | None, device_class: str | None) -> None:
+    config = {
+        "name": name,
+        "unique_id": f"{DEVICE_ID}_{key}",
+        "state_topic": f"{DEVICE_ID}/state",
+        "value_template": f"{{{{ value_json.{key} }}}}",
+        "unit_of_measurement": unit,
+        "device_class": device_class,
+        "device": {
+            "identifiers": [DEVICE_ID],
+            "name": "MyOpel OBD",
+            "manufacturer": "Peugeot/Citroën",
+            "model": "MD1CS003 1.5 BlueHDi",
+        },
+    }
+    topic = f"{HA_DISCOVERY_PREFIX}/sensor/{DEVICE_ID}/{key}/config"
+    client.publish(topic, json.dumps(config), retain=True)
+
+# Publish all sensor discoveries once at startup
+def publish_all_discoveries(client: mqtt.Client) -> None:
+    sensors = [
+        ("obd_trip_dpf_soot_pct",       "DPF Soot %",         "%",      None),
+        ("obd_trip_dpf_regen_state",     "DPF Regen State",    None,     None),
+        ("obd_trip_dpf_since_regen_km",  "km Since Regen",     "km",     "distance"),
+        ("obd_trip_dpf_avg_regen_km",    "Avg km per Regen",   "km",     "distance"),
+        ("obd_trip_adblue_range_km",     "AdBlue Range",       "km",     "distance"),
+        ("obd_trip_exhaust_after_cat_c", "EGT After Cat",      "°C",     "temperature"),
+        ("obd_trip_fuel_consumed_l",     "Fuel Consumed",      "L",      None),
+        ("obd_trip_consumption_l100km",  "Consumption",        "L/100km",None),
+        ("obd_trip_distance_km",         "Trip Distance",      "km",     "distance"),
+        ("obd_trip_duration_min",        "Trip Duration",      "min",    "duration"),
+        ("obd_trip_max_speed_kmh",       "Max Speed",          "km/h",   "speed"),
+        ("obd_trip_oil_dilution_pct",    "Oil Dilution",       "%",      None),
+        ("obd_trip_battery_startup_v",   "Battery Startup",    "V",      "voltage"),
+        # .myop sensors
+        ("myop_fuel_level_pct",          "Fuel Level",         "%",      None),
+        ("myop_fuel_autonomy_km",        "Fuel Range",         "km",     "distance"),
+        ("myop_last_trip_alert_count",   "Trip Alerts",        None,     None),
+        ("myop_odometer_km",             "Odometer",           "km",     "distance"),
+    ]
+    for key, name, unit, device_class in sensors:
+        publish_sensor_discovery(client, key, name, unit, device_class)
+
+# After parsing a trip, publish state update in one JSON payload
+def publish_trip_state(client: mqtt.Client, trip: dict) -> None:
+    payload = {k: v for k, v in trip.items() if not isinstance(v, dict)}
+    client.publish(f"{DEVICE_ID}/state", json.dumps(payload), retain=True)
+```
+
+With `retain=True`, the last known value persists in the broker — HA sensors
+survive a restart without needing a new parse.
+
+---
+
+### Unified data model (both sources merged)
+
+A combined trip record joins OBD + .myop data matched by timestamp proximity:
+
+```python
+@dataclass
+class UnifiedTrip:
+    # Identity
+    id:              str          # obd_filename or myop trip id
+    recorded_at:     datetime     # from filename (OBD) or end.date (myop)
+
+    # From CarScanner OBD (CSV/BRC)
+    obd_duration_min:       float | None
+    obd_distance_km:        float | None
+    obd_fuel_consumed_l:    float | None
+    obd_l100km:             float | None
+    obd_dpf_soot_pct:       float | None
+    obd_dpf_regen_state:    str   | None
+    obd_dpf_since_regen_km: float | None
+    obd_dpf_avg_regen_km:   float | None
+    obd_adblue_range_km:    float | None
+    obd_egt_after_max_c:    float | None
+    obd_oil_dilution_pct:   float | None
+    obd_battery_startup_v:  float | None
+    gps_track:              list[GpsPoint]
+    pid_samples:            dict[str, list[tuple[float, float]]]
+
+    # From MyOpel .myop
+    myop_trip_id:           int   | None
+    myop_fuel_level_pct:    int   | None
+    myop_fuel_autonomy_km:  int   | None
+    myop_stellantis_fuel_l: float | None   # fuelConsumption / 1_000_000
+    myop_alerts:            list[int]
+    myop_days_to_service:   int   | None
+    myop_km_to_service:     int   | None
+    myop_price_fuel:        float | None
+
+    # Cross-source derived
+    fuel_cross_check_ok:    bool | None  # OBD vs Stellantis fuel ±15%
+    insights:               list[Insight]
+```
+
+### Trip matching between sources — asynchronous by design
+
+**The two export paths are independent and will rarely arrive together:**
+
+- `.myop` files arrive when the Stellantis server decides to send an email
+  (typically once per day, sometimes days late, sometimes batched).
+- OBD CSV/BRC files arrive immediately when the driver taps "export" in
+  CarScanner (or automatically via Shortcuts).
+
+This means at any point in time you may have:
+- OBD trips with no matching `.myop` record yet (OBD arrived first)
+- `.myop` trips with no OBD data (short trip, CarScanner not running)
+- Both sources available → opportunity to correlate
+
+The correct architecture treats each trip record as **potentially partial**,
+enriching it retroactively when the other source arrives later.
+
+```python
+# trips table always exists; myop fields are nullable
+# When a .myop file arrives days after the OBD parse:
+def enrich_with_myop(obd_trip_id: str, myop_trip: MyOpTrip, db: sqlite3.Connection):
+    db.execute("""
+        UPDATE trips SET
+            myop_trip_id       = ?,
+            myop_fuel_level_pct  = ?,
+            myop_fuel_autonomy_km= ?,
+            myop_stellantis_fuel_l = ?,
+            myop_alerts        = ?,
+            myop_days_to_service = ?,
+            myop_km_to_service   = ?,
+            myop_price_fuel      = ?
+        WHERE id = ?
+    """, (myop_trip.id, myop_trip.fuel_level, myop_trip.autonomy,
+          myop_trip.fuel_l, json.dumps(myop_trip.alerts),
+          myop_trip.days_to_service, myop_trip.km_to_service,
+          myop_trip.price_fuel, obd_trip_id))
+```
+
+### Trip correlation algorithm
+
+Match OBD trips to `.myop` trips when both are present, using timestamp +
+distance as a double-check. Handle the case where either source is absent.
+
+```python
+from datetime import datetime, timedelta, timezone
+
+TIMEZONE_OFFSET_H = 1  # Italy CET (use 2 for CEST)
+
+def correlate(
+    obd_trips: list[dict],       # from OBD parser; have 'recorded_at' (UTC datetime)
+    myop_trips: list[dict],      # from .myop; have 'start.date', 'end.date' (CET strings)
+    tolerance_min: int = 10,     # max allowed gap between OBD start and myop start
+    distance_tolerance_pct: float = 0.20,  # 20% distance discrepancy allowed
+) -> list[dict]:
+    """
+    Returns unified records. Each record has:
+      - obd_data: dict | None
+      - myop_data: dict | None
+      - correlation_confidence: "high" | "low" | "none"
+    Unmatched trips from either source are emitted as partial records.
+    """
+    def myop_start_utc(myop: dict) -> datetime:
+        raw = myop["start"]["date"].rstrip("Z")
+        local = datetime.fromisoformat(raw)
+        return local.replace(tzinfo=timezone.utc) - timedelta(hours=TIMEZONE_OFFSET_H)
+
+    used_myop: set[int] = set()
+    unified: list[dict] = []
+
+    for obd in obd_trips:
+        t_obd = obd["recorded_at"]
+        d_obd = obd.get("obd_trip_distance_km") or 0.0
+
+        best_myop = None
+        best_score = float("inf")
+
+        for myop in myop_trips:
+            if myop["id"] in used_myop:
+                continue
+            t_myop = myop_start_utc(myop)
+            delta_min = abs((t_obd - t_myop).total_seconds()) / 60
+
+            if delta_min > tolerance_min:
+                continue
+
+            d_myop = myop.get("distance", 0.0)
+            dist_ok = (
+                d_obd == 0 or d_myop == 0 or
+                abs(d_obd - d_myop) / max(d_obd, 0.01) <= distance_tolerance_pct
+            )
+            if not dist_ok:
+                continue
+
+            # Score: primarily by timestamp delta, tiebreak by distance match
+            score = delta_min
+            if score < best_score:
+                best_score = score
+                best_myop = myop
+
+        confidence = (
+            "high" if best_myop is not None and best_score <= 3 else
+            "low"  if best_myop is not None else
+            "none"
+        )
+        if best_myop is not None:
+            used_myop.add(best_myop["id"])
+
+        unified.append({
+            "obd_data":              obd,
+            "myop_data":             best_myop,
+            "correlation_confidence": confidence,
+        })
+
+    # Emit unmatched .myop trips as partial records (OBD absent)
+    for myop in myop_trips:
+        if myop["id"] not in used_myop:
+            unified.append({
+                "obd_data":              None,
+                "myop_data":             myop,
+                "correlation_confidence": "none",
+            })
+
+    return unified
+```
+
+### What you gain from correlation
+
+When both sources are available for the same trip:
+
+| Check | OBD value | .myop value | Use for |
+|-------|-----------|-------------|---------|
+| Distance cross-check | `obd_trip_distance_km` | `distance` | Detect GPS drift or odometer error |
+| Fuel cross-check | `obd_trip_fuel_consumed_l` (trapezoid) | `myop_stellantis_fuel_l` | Validate OBD fuel integration accuracy |
+| Departure time | filename timestamp | `start.date` − 1h | Verify clock sync between phone and car |
+| Alert context | DPF soot %, EGT curve | alert code 27 ("FAP intasamento") | Correlate OBD DPF state with official alert |
+
+```python
+# Fuel cross-check example
+def fuel_cross_check(obd_l: float | None, myop_l: float | None) -> bool | None:
+    if obd_l is None or myop_l is None or myop_l == 0:
+        return None
+    discrepancy_pct = abs(obd_l - myop_l) / myop_l
+    return discrepancy_pct <= 0.15   # within 15% = acceptable
+
+# Alert enrichment: alert code 27 = "DPF at risk"
+def enrich_dpf_alert(trip: UnifiedTrip) -> str | None:
+    if trip.myop_data and 27 in (trip.myop_data.get("alerts") or []):
+        soot = trip.obd_data and trip.obd_data.get("obd_trip_dpf_soot_pct")
+        if soot:
+            return (f"Allerta DPF (cod. 27) confermata da OBD: "
+                    f"intasamento al {soot:.0f}%")
+        return "Allerta DPF (cod. 27) da Opel — dati OBD non disponibili per questo viaggio"
+    return None
+```
+
+---
+
+### Storage schema (SQLite — extended for both sources)
 
 ```sql
 CREATE TABLE trips (
-    id               TEXT PRIMARY KEY,     -- obd_filename
-    recorded_at      TEXT,                 -- ISO 8601 UTC from filename
-    duration_min     REAL,
-    distance_km      REAL,
-    avg_speed_kmh    REAL,
-    max_speed_kmh    REAL,
-    avg_rpm          INTEGER,
-    max_rpm          INTEGER,
-    coolant_max_c    REAL,
-    oil_temp_max_c   REAL,
-    odometer_km      INTEGER,
-    fuel_consumed_l  REAL,
-    l100km           REAL,
-    dpf_soot_pct     REAL,
-    dpf_regen_state  TEXT,
-    dpf_since_regen_km REAL,
-    dpf_avg_regen_km   REAL,
-    dpf_capability     REAL,
-    dpf_capability_st  REAL,
-    adblue_range_km    REAL,
-    adblue_vol_l       REAL,
-    egt_after_max_c    REAL,
-    battery_startup_v  REAL,
-    oil_dilution_pct   REAL,
-    ss_state           REAL,
-    air_temp_c         REAL,
-    created_at         TEXT DEFAULT (datetime('now'))
+    id               TEXT PRIMARY KEY,  -- obd_filename or "myop:{myop_trip_id}"
+    source           TEXT,              -- "obd_csv" | "obd_brc" | "myop" | "unified"
+    recorded_at      TEXT,              -- ISO 8601 UTC
+    myop_trip_id     INTEGER,           -- Stellantis trip id (nullable)
+
+    -- OBD fields
+    obd_duration_min     REAL,
+    obd_distance_km      REAL,
+    obd_fuel_consumed_l  REAL,
+    obd_l100km           REAL,
+    obd_dpf_soot_pct     REAL,
+    obd_dpf_regen_state  TEXT,
+    obd_dpf_since_regen_km REAL,
+    obd_dpf_avg_regen_km   REAL,
+    obd_adblue_range_km    REAL,
+    obd_egt_after_max_c    REAL,
+    obd_battery_startup_v  REAL,
+    obd_oil_dilution_pct   REAL,
+    obd_odometer_km        INTEGER,
+    obd_max_speed_kmh      REAL,
+    obd_avg_rpm            INTEGER,
+    obd_coolant_max_c      REAL,
+    obd_oil_temp_max_c     REAL,
+
+    -- MyOpel fields
+    myop_fuel_level_pct    INTEGER,
+    myop_fuel_autonomy_km  INTEGER,
+    myop_stellantis_fuel_l REAL,
+    myop_alerts            TEXT,       -- JSON array of int
+    myop_days_to_service   INTEGER,
+    myop_km_to_service     INTEGER,
+    myop_price_fuel        REAL,
+
+    created_at  TEXT DEFAULT (datetime('now'))
 );
 
 CREATE TABLE pid_samples (
     trip_id   TEXT NOT NULL REFERENCES trips(id),
     slug      TEXT NOT NULL,
-    ts        REAL NOT NULL,   -- seconds since session epoch
+    ts        REAL NOT NULL,
     value     REAL NOT NULL,
     PRIMARY KEY (trip_id, slug, ts)
 );
@@ -1059,49 +1530,56 @@ CREATE TABLE insights (
     trip_id    TEXT,
     timestamp  TEXT,
     category   TEXT,
-    level      TEXT,           -- info | warning | critical
+    level      TEXT,
     title      TEXT,
     body       TEXT,
-    is_trend   INTEGER,        -- 0 = per-trip, 1 = cross-trip
+    is_trend   INTEGER,
     created_at TEXT DEFAULT (datetime('now'))
 );
-CREATE INDEX idx_insights_level ON insights(level);
 ```
+
+---
 
 ### API endpoints
 
 ```
-GET  /trips                      → list of trip summaries (paginated)
-GET  /trips/{id}                 → full trip dict (all curated keys + obd_pid_values)
-GET  /trips/{id}/gps             → GeoJSON FeatureCollection (polyline + events)
-GET  /trips/{id}/pid/{slug}      → [(ts, value)] time series for one PID
-GET  /trips/{id}/pid/{slug}/map  → GeoJSON colored segments for map overlay
-GET  /insights?level=warning     → list of insights filtered by level
-GET  /insights/summary           → count per category + most recent critical
-POST /upload                     → accept CSV/BRC file, trigger parse + analyze
-WS   /live                       → real-time push when new file parsed
+GET  /trips                       → list of unified trip summaries (paginated)
+GET  /trips/{id}                  → full trip dict (OBD + myop + insights)
+GET  /trips/{id}/gps              → GeoJSON FeatureCollection
+GET  /trips/{id}/pid/{slug}       → [(ts, value)] time series
+GET  /trips/{id}/pid/{slug}/map   → GeoJSON colored segments for map overlay
+GET  /insights?level=warning      → insights filtered by level
+GET  /insights/summary            → count per category + latest critical
+POST /upload/obd                  → accept CSV/BRC, parse and analyze
+POST /upload/myop                 → accept .myop JSON, merge trips
+WS   /live                        → push when new trip parsed
 ```
 
-### Parser integration (reuse from HA integration)
+---
 
-The parsing functions are pure Python with no HA dependencies — extract them
-into a shared library:
+### Why standalone is better for your use case
 
-```python
-# obd_parser/__init__.py
-from .coordinator_obd import (
-    _parse_csv_file,
-    _parse_brc_file,
-    _compute_stats,
-    _rbs_swap_value,
-    _RBS_FIXES,
-    RECORD_MARKER,
-    CATALOG_SEP,
-)
-```
+| Feature | HA-native | Standalone + MQTT |
+|---------|-----------|-------------------|
+| GPS map with PID overlay | Not possible in Lovelace | Full MapLibre GL JS |
+| Cross-trip trend charts | Very limited (LTS only) | Arbitrary SQL queries |
+| AI insight cards | Custom card only | Full web UI flexibility |
+| Trip timeline / history | Only last-trip sensors | Unlimited SQLite history |
+| HA automations (DPF alert) | Native | Via MQTT (same result) |
+| HA Energy dashboard | Via LTS injection | Via MQTT + device class |
+| HA restart survivability | Built-in persistence | MQTT retain=true |
+| Mobile app / PWA | Not possible | Full PWA capability |
+| OBD parser reuse | Already implemented | Copy 4 functions from coordinator_obd.py |
+| .myop parser reuse | Already implemented | Copy _parse_file from __init__.py |
 
-These functions are already tested (121 unit tests in `tests/test_coordinator_obd.py`)
-and handle all edge cases observed in the real log corpus.
+The only thing you'd lose by going standalone is that the HA integration is
+already battle-tested with watchdog, IMAP IDLE, deduplication, and RBS fixes.
+But you copy those ~400 lines of pure-Python logic — zero HA imports — and the
+standalone backend gets all of that for free.
+
+**Bottom line:** build the standalone platform, expose 15–20 key sensors via
+MQTT autodiscovery, decommission the HA custom integration. You gain everything,
+you lose nothing that MQTT can't replicate.
 
 ---
 

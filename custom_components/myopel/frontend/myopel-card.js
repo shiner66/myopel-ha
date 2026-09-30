@@ -25,7 +25,9 @@ const MAPLIBRE_LEAFLET_SCRIPT_URL = new URL(
   `./vendor/maplibre-gl-leaflet-${MAPLIBRE_LEAFLET_VERSION}/leaflet-maplibre-gl.js`,
   CARD_MODULE_URL,
 ).href;
-const MAP_STYLE_URL = "https://tiles.openfreemap.org/styles/liberty";
+const MAP_STYLE_URL = "https://tiles.openfreemap.org/styles/positron";
+// The Leaflet adapter renders MapLibre one level lower; 16 exposes GL z15 road labels.
+const MAP_ZOOM = 16;
 const OPENFREEMAP_ATTRIBUTION =
   '<a href="https://openfreemap.org/" target="_blank" rel="noopener noreferrer">OpenFreeMap</a> ' +
   '<a href="https://www.openmaptiles.org/" target="_blank" rel="noopener noreferrer">&copy; OpenMapTiles</a> ' +
@@ -1031,6 +1033,7 @@ class MyOpelCard extends LitElement {
     + '<circle cx="17" cy="15" r="3" fill="#e3001b"/></svg>';
 
   var lat = ${lat}, lon = ${lon};
+  var mapZoom = ${MAP_ZOOM};
   if (!window.L || window.myopelLeafletCssFailed) {
     showMapError('Mappa non disponibile. Impossibile caricare Leaflet.');
   } else {
@@ -1045,7 +1048,7 @@ class MyOpelCard extends LitElement {
       iconSize: [34, 44], iconAnchor: [17, 44]
     });
     marker = L.marker([lat, lon], { icon: icon }).addTo(map);
-    map.setView([lat, lon], 15);
+    map.setView([lat, lon], mapZoom);
 
     function useFallback(reason) {
       if (fallbackStarted) return;
@@ -1126,7 +1129,7 @@ class MyOpelCard extends LitElement {
         || newLat < -90 || newLat > 90 || newLon < -180 || newLon > 180) return;
     if (!map || !marker) return;
     marker.setLatLng([newLat, newLon]);
-    map.setView([newLat, newLon], 15);
+    map.setView([newLat, newLon], mapZoom);
   });
 <\/script>
 </body>

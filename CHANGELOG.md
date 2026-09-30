@@ -4,6 +4,15 @@ Tutte le modifiche rilevanti a questa integrazione sono documentate qui.
 
 ---
 
+## [1.4.6] – 2026-09-30
+
+### Correzioni
+- Sostituito lo stile Liberty della mappa OpenFreeMap con Positron, più chiaro e
+  vicino all'aspetto della mappa standard di Home Assistant. Il nuovo stile
+  mantiene i nomi delle strade, anche sulle vie secondarie grazie al livello di
+  zoom corretto per l'adapter MapLibre, non richiede API key e usa la stessa
+  attribuzione e lo stesso fallback OpenTopoMap già presenti.
+
 ## [1.4.5] – 2026-09-30
 
 ### Correzioni

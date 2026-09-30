@@ -228,6 +228,9 @@ _STUBS: dict[str, Any] = {
         "DataUpdateCoordinator": DataUpdateCoordinator,
         "UpdateFailed": UpdateFailed,
     }),
+    "homeassistant.setup": _make({
+        "async_when_setup": lambda *args, **kwargs: None,
+    }),
     "watchdog": MagicMock(),
     "watchdog.events": MagicMock(),
     "watchdog.observers": MagicMock(),

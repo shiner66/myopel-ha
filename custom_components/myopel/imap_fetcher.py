@@ -9,11 +9,15 @@ Falls back to polling if IDLE is not supported or the connection drops.
 """
 from __future__ import annotations
 
+import asyncio
 import email
 import imaplib
+import json
 import logging
+import os
 import re
 import socket
+import tempfile
 import threading
 from datetime import timedelta
 from email.header import decode_header
@@ -34,7 +38,10 @@ from .const import (
     DEFAULT_IMAP_FOLDER,
     DEFAULT_IMAP_INTERVAL,
     DEFAULT_IMAP_PORT,
+    IMAP_CONNECTION_TIMEOUT,
+    MAX_IMAP_ATTACHMENT_BYTES,
 )
+from .snapshot import InvalidSnapshotError, normalize_vin, parse_snapshot
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -60,7 +67,9 @@ def _cleanup_stale_snapshots(save_path: Path, keep_name: str) -> int:
     feed the parser's safety-net merge with stale data and waste disk space.
     """
     removed = 0
-    for old in save_path.glob("*.myop"):
+    for old in save_path.iterdir():
+        if not old.is_file() or old.suffix.lower() != ".myop":
+            continue
         if old.name == keep_name:
             continue
         try:
@@ -72,7 +81,63 @@ def _cleanup_stale_snapshots(save_path: Path, keep_name: str) -> int:
     return removed
 
 
-def _fetch_myop_attachments(config: dict, save_folder: str) -> list[str]:
+def _safe_attachment_name(filename: str) -> str:
+    """Return a filesystem-safe name with a normalized lowercase suffix."""
+    safe_name = re.sub(r"[^\w.\-]", "_", filename)
+    return f"{safe_name[:-5]}.myop"
+
+
+def _validate_attachment_payload(payload: bytes, expected_vin: str | None) -> str | None:
+    """Validate an attachment before it can replace the last good snapshot."""
+    if len(payload) > MAX_IMAP_ATTACHMENT_BYTES:
+        _LOGGER.warning(
+            "MyOpel IMAP: allegato ignorato perché supera %d byte",
+            MAX_IMAP_ATTACHMENT_BYTES,
+        )
+        return None
+    try:
+        vin, _ = parse_snapshot(payload, require_trips=True)
+    except (InvalidSnapshotError, json.JSONDecodeError, UnicodeDecodeError) as err:
+        _LOGGER.warning("MyOpel IMAP: allegato .myop non valido, ignorato (%s)", err)
+        return None
+
+    normalized_expected = normalize_vin(expected_vin)
+    if normalized_expected is not None and vin != normalized_expected:
+        _LOGGER.warning(
+            "MyOpel IMAP: allegato per VIN %s ignorato (atteso %s)",
+            vin,
+            normalized_expected,
+        )
+        return None
+    return vin
+
+
+def _atomic_write(dest: Path, payload: bytes) -> None:
+    """Atomically replace ``dest`` with ``payload`` in the same directory."""
+    fd, tmp_name = tempfile.mkstemp(
+        dir=dest.parent,
+        prefix=f".{dest.name}.",
+        suffix=".tmp",
+    )
+    try:
+        with os.fdopen(fd, "wb") as tmp_file:
+            tmp_file.write(payload)
+            tmp_file.flush()
+            os.fsync(tmp_file.fileno())
+        os.replace(tmp_name, dest)
+    except Exception:
+        try:
+            Path(tmp_name).unlink(missing_ok=True)
+        except OSError:
+            pass
+        raise
+
+
+def _fetch_myop_attachments(
+    config: dict,
+    save_folder: str,
+    expected_vin: str | None = None,
+) -> list[str]:
     """Connect to IMAP, save the single most recent .myop attachment.
 
     MyOpel emails carry cumulative snapshots — only the latest one matters.
@@ -92,37 +157,49 @@ def _fetch_myop_attachments(config: dict, save_folder: str) -> list[str]:
     saved: list[str] = []
     kept_name: str | None = None
 
+    conn: imaplib.IMAP4_SSL | None = None
     try:
-        conn = imaplib.IMAP4_SSL(server, port)
+        conn = imaplib.IMAP4_SSL(server, port, timeout=IMAP_CONNECTION_TIMEOUT)
         conn.login(username, password)
-        conn.select(imap_folder)
+        status, _ = conn.select(imap_folder)
+        if status != "OK":
+            raise imaplib.IMAP4.error(f"Cannot select IMAP folder {imap_folder}")
 
         def _search(*criteria) -> list[bytes]:
             status, data = conn.search(None, *criteria)
             return data[0].split() if status == "OK" and data[0] else []
 
-        # 1. Unread first
-        message_ids = _search("UNSEEN", f'FROM "{sender_filter}"') if sender_filter \
+        # Search both unread and recent messages.  Looking at recent mail only
+        # when UNSEEN is empty lets one unrelated unread message hide a newer,
+        # already-read MyOpel export forever.
+        unseen_ids = _search("UNSEEN", f'FROM "{sender_filter}"') if sender_filter \
                  else _search("UNSEEN")
-
-        # 2. Fallback: last 7 days (catches already-read emails)
-        if not message_ids:
-            import datetime as _dt
-            since = (_dt.date.today() - _dt.timedelta(days=7)).strftime("%d-%b-%Y")
-            message_ids = _search(f'SINCE {since}', f'FROM "{sender_filter}"') if sender_filter \
-                     else _search(f'SINCE {since}')
-            if message_ids:
-                _LOGGER.debug("MyOpel IMAP: nessuna UNSEEN, trovati %d msg negli ultimi 7gg",
-                              len(message_ids))
+        import datetime as _dt
+        since = (_dt.date.today() - _dt.timedelta(days=7)).strftime("%d-%b-%Y")
+        recent_ids = _search(f'SINCE {since}', f'FROM "{sender_filter}"') if sender_filter \
+                 else _search(f'SINCE {since}')
+        message_ids = list(set(unseen_ids) | set(recent_ids))
 
         # IMAP assigns sequence numbers in arrival order — highest == newest.
         message_ids_sorted = sorted(message_ids, key=lambda b: int(b), reverse=True)
 
         for msg_id in message_ids_sorted:
-            status, msg_data = conn.fetch(msg_id, "(RFC822)")
+            status, msg_data = conn.fetch(msg_id, "(BODY.PEEK[])")
             if status != "OK":
                 continue
-            msg = email.message_from_bytes(msg_data[0][1])
+            raw_message = next(
+                (
+                    item[1]
+                    for item in msg_data
+                    if isinstance(item, tuple)
+                    and len(item) > 1
+                    and isinstance(item[1], bytes)
+                ),
+                None,
+            )
+            if raw_message is None:
+                continue
+            msg = email.message_from_bytes(raw_message)
             found = False
             for part in msg.walk():
                 if "attachment" not in part.get("Content-Disposition", ""):
@@ -133,22 +210,25 @@ def _fetch_myop_attachments(config: dict, save_folder: str) -> list[str]:
                 filename = _decode_header_value(filename_raw)
                 if not filename.lower().endswith(".myop"):
                     continue
-                safe_name = re.sub(r'[^\w.\-]', '_', filename)
-                dest = save_path / safe_name
                 payload = part.get_payload(decode=True)
                 if not payload:
                     continue
-                kept_name = safe_name
+                if _validate_attachment_payload(payload, expected_vin) is None:
+                    continue
+                safe_name = _safe_attachment_name(filename)
+                dest = save_path / safe_name
                 # Skip the write if the file on disk already matches the payload:
                 # rewriting would bump mtime and wake the watchdog for nothing.
                 if dest.is_file():
                     try:
                         if dest.read_bytes() == payload:
+                            kept_name = safe_name
                             found = True
                             break
                     except OSError:
                         pass
-                dest.write_bytes(payload)
+                _atomic_write(dest, payload)
+                kept_name = safe_name
                 saved.append(str(dest))
                 found = True
                 _LOGGER.info("MyOpel IMAP: salvato → %s", dest)
@@ -156,12 +236,16 @@ def _fetch_myop_attachments(config: dict, save_folder: str) -> list[str]:
             if found:
                 conn.store(msg_id, "+FLAGS", "\\Seen")
                 break  # newest snapshot handled — ignore anything older
-
-        conn.logout()
     except imaplib.IMAP4.error as err:
         _LOGGER.error("MyOpel IMAP error: %s", err)
     except OSError as err:
         _LOGGER.error("MyOpel IMAP connessione fallita: %s", err)
+    finally:
+        if conn is not None:
+            try:
+                conn.logout()
+            except (imaplib.IMAP4.error, OSError):
+                pass
 
     if kept_name:
         _cleanup_stale_snapshots(save_path, kept_name)
@@ -184,6 +268,8 @@ class _IdleWorker:
         self._on_no_idle  = on_no_idle
         self._stop        = threading.Event()
         self._thread: threading.Thread | None = None
+        self._connection: imaplib.IMAP4_SSL | None = None
+        self._connection_lock = threading.Lock()
 
     def start(self) -> None:
         self._stop.clear()
@@ -193,9 +279,28 @@ class _IdleWorker:
 
     def stop(self) -> None:
         self._stop.set()
+        with self._connection_lock:
+            connection = self._connection
+        if connection is not None:
+            try:
+                # Interrupt the socket before touching imaplib's buffered file.
+                # IMAP4.shutdown() closes that file first and can deadlock when
+                # the worker thread is blocked in readline().
+                connection.socket().shutdown(socket.SHUT_RDWR)
+            except (AttributeError, OSError):
+                pass
         if self._thread:
             self._thread.join(timeout=5)
         _LOGGER.debug("MyOpel IMAP IDLE worker fermato")
+
+    def _set_connection(self, connection: imaplib.IMAP4_SSL | None) -> None:
+        with self._connection_lock:
+            self._connection = connection
+
+    def _clear_connection(self, connection: imaplib.IMAP4_SSL) -> None:
+        with self._connection_lock:
+            if self._connection is connection:
+                self._connection = None
 
     def _connect(self) -> imaplib.IMAP4_SSL:
         server  = self._config[CONF_IMAP_SERVER]
@@ -203,10 +308,23 @@ class _IdleWorker:
         user    = self._config[CONF_IMAP_USERNAME]
         pwd     = self._config[CONF_IMAP_PASSWORD]
         folder  = self._config.get(CONF_IMAP_FOLDER, DEFAULT_IMAP_FOLDER)
-        conn = imaplib.IMAP4_SSL(server, port)
-        conn.login(user, pwd)
-        conn.select(folder)
-        return conn
+        conn = imaplib.IMAP4_SSL(server, port, timeout=IMAP_CONNECTION_TIMEOUT)
+        self._set_connection(conn)
+        try:
+            if self._stop.is_set():
+                raise OSError("IMAP worker stopped")
+            conn.login(user, pwd)
+            status, _ = conn.select(folder)
+            if status != "OK":
+                raise imaplib.IMAP4.error(f"Cannot select IMAP folder {folder}")
+            return conn
+        except Exception:
+            self._clear_connection(conn)
+            try:
+                conn.shutdown()
+            except (imaplib.IMAP4.error, OSError):
+                pass
+            raise
 
     def _run(self) -> None:
         """Main loop: connect → IDLE → on new mail → repeat."""
@@ -214,6 +332,8 @@ class _IdleWorker:
             conn = None
             try:
                 conn = self._connect()
+                if self._stop.is_set():
+                    break
 
                 # Check IDLE capability
                 _, caps = conn.capability()
@@ -247,6 +367,7 @@ class _IdleWorker:
                             # EXISTS = new message(s) arrived
                             if b"EXISTS" in line or b"RECENT" in line:
                                 new_mail = True
+                                break
                             # Server sent BYE or we hit timeout → break inner loop
                             if line.startswith(b"*") is False and b"IDLE" in line:
                                 break
@@ -264,15 +385,18 @@ class _IdleWorker:
                     except (OSError, imaplib.IMAP4.error):
                         break
 
-                    if new_mail:
+                    if new_mail and not self._stop.is_set():
                         _LOGGER.info("MyOpel IMAP IDLE: nuova mail rilevata, avvio download")
                         self._on_new_mail()
                         # Reset socket to blocking after notifying
                     conn.socket().settimeout(None)
 
             except (imaplib.IMAP4.error, OSError) as err:
-                _LOGGER.warning("MyOpel IMAP IDLE errore connessione: %s — riconnessione in 30s", err)
+                if not self._stop.is_set():
+                    _LOGGER.warning("MyOpel IMAP IDLE errore connessione: %s — riconnessione in 30s", err)
             finally:
+                if conn is not None:
+                    self._clear_connection(conn)
                 try:
                     conn and conn.logout()
                 except Exception:
@@ -310,11 +434,14 @@ class MyOpelImapFetcher:
         self._on_no_idle  = on_no_idle
         self._unsub_poll  = None
         self._idle_worker: _IdleWorker | None = None
+        self._fetch_lock = asyncio.Lock()
+        self._stopping = False
         interval_s = imap_config.get(CONF_IMAP_INTERVAL, DEFAULT_IMAP_INTERVAL)
         self._interval = timedelta(seconds=interval_s)
 
     async def async_start(self) -> None:
         """Fetch immediately, start IDLE worker and periodic poll."""
+        self._stopping = False
         # Immediate fetch on startup
         await self._async_fetch_and_refresh()
 
@@ -339,6 +466,8 @@ class MyOpelImapFetcher:
 
     def _on_idle_new_mail(self) -> None:
         """Called from IDLE thread when new mail arrives — schedule fetch on event loop."""
+        if self._stopping:
+            return
         self._hass.loop.call_soon_threadsafe(
             lambda: self._hass.async_create_task(self._async_fetch_and_refresh())
         )
@@ -347,17 +476,31 @@ class MyOpelImapFetcher:
         await self._async_fetch_and_refresh()
 
     async def _async_fetch_and_refresh(self) -> None:
-        saved = await self._hass.async_add_executor_job(
-            _fetch_myop_attachments, self._config, self._folder
-        )
-        if saved:
-            _LOGGER.info("MyOpel IMAP: %d file scaricati, aggiorno sensori", len(saved))
-            await self._coordinator.async_request_refresh()
+        async with self._fetch_lock:
+            if self._stopping:
+                return
+            expected_vin = getattr(self._coordinator, "expected_vin", None)
+            saved = await self._hass.async_add_executor_job(
+                _fetch_myop_attachments,
+                self._config,
+                self._folder,
+                expected_vin,
+            )
+            if saved and not self._stopping:
+                _LOGGER.info("MyOpel IMAP: %d file scaricati, aggiorno sensori", len(saved))
+                await self._coordinator.async_request_refresh()
 
-    def async_stop(self) -> None:
+    async def async_stop(self) -> None:
+        """Stop polling and IDLE without blocking Home Assistant's event loop."""
+        self._stopping = True
         if self._unsub_poll:
             self._unsub_poll()
             self._unsub_poll = None
         if self._idle_worker:
-            self._idle_worker.stop()
+            worker = self._idle_worker
             self._idle_worker = None
+            await self._hass.async_add_executor_job(worker.stop)
+        # Wait asynchronously for an in-flight fetch to leave its critical
+        # section. Queued callbacks see ``_stopping`` and return immediately.
+        async with self._fetch_lock:
+            pass

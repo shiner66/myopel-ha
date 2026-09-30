@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import imaplib
-import json
 from pathlib import Path
 from typing import Any
 
@@ -30,18 +29,20 @@ from .const import (
     DEFAULT_IMAP_FOLDER,
     DEFAULT_IMAP_INTERVAL,
     DEFAULT_IMAP_PORT,
+    IMAP_CONNECTION_TIMEOUT,
     DEFAULT_MIN_TRIP_DISTANCE,
     DEFAULT_SCAN_INTERVAL,
     DEFAULT_TIME_OFFSET,
     DOMAIN,
 )
+from .snapshot import InvalidSnapshotError, parse_snapshot
 
 DEFAULT_FOLDER = "/config/myopel/"
 
 
 # ── Validators ────────────────────────────────────────────────────────────────
 
-def _validate_trip_folder(path: str) -> dict | None:
+def _validate_trip_folder(path: str) -> str | None:
     """
     Validate the folder path.
     Accepts both .myop (legacy) and trips.json (native app format).
@@ -56,25 +57,31 @@ def _validate_trip_folder(path: str) -> dict | None:
     if not p.is_dir():
         raise NotADirectoryError
 
-    candidates = list(p.glob("*.myop")) + list(p.glob("trips.json")) + (
-        [p / "trips.export"] if (p / "trips.export").is_file() else []
-    )
+    candidates = [
+        candidate
+        for candidate in p.iterdir()
+        if candidate.is_file()
+        and (
+            candidate.suffix.lower() == ".myop"
+            or candidate.name in {"trips", "trips.json", "trips.export"}
+        )
+    ]
     if not candidates:
         return None  # empty folder — ok if IMAP configured or file copied later
 
     candidates.sort(key=lambda f: f.stat().st_mtime, reverse=True)
     try:
-        data = json.loads(candidates[0].read_text(encoding="utf-8"))
-        if not isinstance(data, list) or not data or "vin" not in data[0]:
-            raise ValueError("invalid_format")
-        return data
-    except json.JSONDecodeError as err:
+        vin, _ = parse_snapshot(candidates[0].read_text(encoding="utf-8"))
+        return vin
+    except InvalidSnapshotError as err:
+        raise ValueError("invalid_format") from err
+    except (ValueError, UnicodeDecodeError) as err:
         raise ValueError("invalid_json") from err
 
 
 def _validate_imap(server: str, port: int, username: str, password: str, folder: str) -> None:
     """Try to connect and login to verify credentials. Raises on failure."""
-    conn = imaplib.IMAP4_SSL(server, port)
+    conn = imaplib.IMAP4_SSL(server, port, timeout=IMAP_CONNECTION_TIMEOUT)
     try:
         conn.login(username, password)
         status, _ = conn.select(folder)
@@ -105,7 +112,7 @@ class MyOpelConfigFlow(ConfigFlow, domain=DOMAIN):
         errors: dict[str, str] = {}
 
         if user_input is not None:
-            path = user_input[CONF_FILE_PATH].strip()
+            path = user_input[CONF_FILE_PATH].strip() or DEFAULT_FOLDER
             try:
                 data = await self.hass.async_add_executor_job(
                     _validate_trip_folder, path
@@ -118,7 +125,7 @@ class MyOpelConfigFlow(ConfigFlow, domain=DOMAIN):
                 ) else "invalid_format"
             else:
                 self._folder_path = path
-                self._vin = data[0].get("vin", "unknown") if data else "unknown"
+                self._vin = data if data else "unknown"
                 if data:
                     await self.async_set_unique_id(self._vin)
                     self._abort_if_unique_id_configured()
@@ -198,7 +205,7 @@ class MyOpelConfigFlow(ConfigFlow, domain=DOMAIN):
     @staticmethod
     @callback
     def async_get_options_flow(config_entry: ConfigEntry) -> OptionsFlow:
-        return MyOpelOptionsFlow()
+        return MyOpelOptionsFlow(config_entry)
 
 
 # ── Options Flow ──────────────────────────────────────────────────────────────
@@ -206,16 +213,38 @@ class MyOpelConfigFlow(ConfigFlow, domain=DOMAIN):
 class MyOpelOptionsFlow(OptionsFlow):
     """Options: folder path, polling interval, IMAP settings."""
 
+    def __init__(self, config_entry: ConfigEntry) -> None:
+        """Keep the entry without assigning HA's read-only config_entry property."""
+        self._entry = config_entry
+
     async def async_step_init(
         self, user_input: dict[str, Any] | None = None
     ) -> FlowResult:
         errors: dict[str, str] = {}
-        d = self.config_entry.data
-        o = self.config_entry.options
+        d = self._entry.data
+        o = self._entry.options
+        current_path = str(
+            o.get(CONF_FILE_PATH, d.get(CONF_FILE_PATH, DEFAULT_FOLDER))
+        ).strip() or DEFAULT_FOLDER
 
         if user_input is not None:
+            normalized = dict(user_input)
+            normalized[CONF_FILE_PATH] = (
+                str(user_input.get(CONF_FILE_PATH, "")).strip() or current_path
+            )
+            for key in (
+                CONF_IMAP_SERVER,
+                CONF_IMAP_USERNAME,
+                CONF_IMAP_FOLDER,
+                CONF_IMAP_SENDER,
+            ):
+                if key in normalized:
+                    normalized[key] = str(normalized[key]).strip()
+            if not normalized.get(CONF_IMAP_FOLDER):
+                normalized[CONF_IMAP_FOLDER] = DEFAULT_IMAP_FOLDER
+
             # Validate new folder path if changed
-            new_path = user_input.get(CONF_FILE_PATH, "").strip()
+            new_path = normalized[CONF_FILE_PATH]
             if new_path:
                 try:
                     await self.hass.async_add_executor_job(
@@ -228,17 +257,17 @@ class MyOpelOptionsFlow(OptionsFlow):
                         "invalid_format", "invalid_json"
                     ) else "invalid_format"
 
-            imap_disabled = user_input.get(CONF_IMAP_DISABLED, False)
-            imap_server = user_input.get(CONF_IMAP_SERVER, "").strip()
+            imap_disabled = normalized.get(CONF_IMAP_DISABLED, False)
+            imap_server = normalized.get(CONF_IMAP_SERVER, "")
             if not imap_disabled and imap_server:
                 try:
                     await self.hass.async_add_executor_job(
                         _validate_imap,
                         imap_server,
-                        user_input.get(CONF_IMAP_PORT, DEFAULT_IMAP_PORT),
-                        user_input.get(CONF_IMAP_USERNAME, "").strip(),
-                        user_input.get(CONF_IMAP_PASSWORD, ""),
-                        user_input.get(CONF_IMAP_FOLDER, DEFAULT_IMAP_FOLDER).strip(),
+                        normalized.get(CONF_IMAP_PORT, DEFAULT_IMAP_PORT),
+                        normalized.get(CONF_IMAP_USERNAME, ""),
+                        normalized.get(CONF_IMAP_PASSWORD, ""),
+                        normalized.get(CONF_IMAP_FOLDER, DEFAULT_IMAP_FOLDER),
                     )
                 except imaplib.IMAP4.error:
                     errors["base"] = "imap_auth_failed"
@@ -248,9 +277,7 @@ class MyOpelOptionsFlow(OptionsFlow):
                     errors[CONF_IMAP_FOLDER] = str(err)
 
             if not errors:
-                return self.async_create_entry(title="", data=user_input)
-
-        current_path = o.get(CONF_FILE_PATH, d.get(CONF_FILE_PATH, DEFAULT_FOLDER))
+                return self.async_create_entry(title="", data=normalized)
 
         return self.async_show_form(
             step_id="init",

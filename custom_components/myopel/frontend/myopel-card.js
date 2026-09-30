@@ -1,4 +1,8 @@
-import { LitElement, html, css, nothing } from "https://unpkg.com/lit?module";
+import { LitElement, html, css, nothing } from "https://unpkg.com/lit@3.2.1/index.js?module";
+
+const MAP_TILE_URL = "https://tile.openstreetmap.org/{z}/{x}/{y}.png";
+const MAP_ATTRIBUTION =
+  '&copy; <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener noreferrer">OpenStreetMap</a> contributors';
 
 class MyOpelCard extends LitElement {
   static properties = {
@@ -429,8 +433,6 @@ class MyOpelCard extends LitElement {
     this._refuelView = false;
     this._showAcked  = {};
     this._periodView = "month";
-    this._leafletMap = null;
-    this._leafletMarker = null;
     this._view360Idx = 0;
     this._use360     = !!(config.car_view_360);
     this._v360Start  = null;
@@ -444,21 +446,7 @@ class MyOpelCard extends LitElement {
     this._v360Sens   = 12;
   }
   set hass(h) {
-    const prev = this._hass;
     this._hass = h;
-    // If lat/lon changed, update marker without full re-render
-    if (this._leafletMap && prev) {
-      const plate = this._uniprefix();
-      if (plate) {
-        const tracker = this._hass.states[`device_tracker.auto_${plate}`];
-        const lat = tracker?.attributes?.latitude;
-        const lon = tracker?.attributes?.longitude;
-        if (lat && lon) {
-          this._leafletMarker?.setLatLng([lat, lon]);
-          this._leafletMap.setView([lat, lon]);
-        }
-      }
-    }
   }
   getCardSize() { return 7; }
 
@@ -473,6 +461,22 @@ class MyOpelCard extends LitElement {
     const id = `${domain}.${suffix}_${p}`;
     const s = this._hass.states[id];
     return (s && s.state !== "unavailable" && s.state !== "unknown") ? s : null;
+  }
+
+  _mapCoordinates(tracker) {
+    const rawLat = tracker?.attributes?.latitude;
+    const rawLon = tracker?.attributes?.longitude;
+    if (rawLat === null || rawLat === undefined
+        || (typeof rawLat === 'string' && rawLat.trim() === '')
+        || rawLon === null || rawLon === undefined
+        || (typeof rawLon === 'string' && rawLon.trim() === '')) return null;
+    const lat = Number(rawLat);
+    const lon = Number(rawLon);
+    if (
+      !Number.isFinite(lat) || !Number.isFinite(lon)
+      || lat < -90 || lat > 90 || lon < -180 || lon > 180
+    ) return null;
+    return { lat, lon };
   }
   _uniVal(suffix, domain = "sensor") {
     const e = this._uni(suffix, domain);
@@ -504,7 +508,9 @@ class MyOpelCard extends LitElement {
   }
   _num(suffix, domain = "sensor") {
     const v = this._state(suffix, domain);
-    return v !== null ? parseFloat(v) : null;
+    if (v === null) return null;
+    const parsed = Number.parseFloat(v);
+    return Number.isFinite(parsed) ? parsed : null;
   }
   _fmt(suffix, domain = "sensor", dec = 1) {
     const v = this._num(suffix, domain);
@@ -928,10 +934,12 @@ class MyOpelCard extends LitElement {
 <meta charset="utf-8">
 <style>
   * { margin:0; padding:0; box-sizing:border-box; }
-  html, body, #map { width:100%; height:100%; background:#111; }
-  .leaflet-container { background:#111 !important; }
-  /* hide Leaflet default attribution */
-  .leaflet-control-attribution { display:none !important; }
+  html, body, #map { width:100%; height:100%; background:#e5e3df; }
+  .leaflet-container { background:#e5e3df !important; }
+  .leaflet-control-attribution {
+    background:rgba(255,255,255,.86) !important;
+    font:9px/1.2 Arial,sans-serif !important;
+  }
 </style>
 <link rel="stylesheet"
   href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
@@ -941,14 +949,14 @@ class MyOpelCard extends LitElement {
 <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"><\/script>
 <script>
   var map = L.map('map', {
-    zoomControl: false, attributionControl: false,
+    zoomControl: false, attributionControl: true,
     dragging: false, scrollWheelZoom: false,
     doubleClickZoom: false, touchZoom: false, keyboard: false
   });
 
   L.tileLayer(
-    'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png',
-    { maxZoom: 19, subdomains: 'abcd' }
+    ${JSON.stringify(MAP_TILE_URL)},
+    { maxZoom: 19, attribution: ${JSON.stringify(MAP_ATTRIBUTION)} }
   ).addTo(map);
 
   var pinSvg = '<svg width="34" height="44" viewBox="0 0 34 44" xmlns="http://www.w3.org/2000/svg">'
@@ -970,11 +978,12 @@ class MyOpelCard extends LitElement {
 
   // Listen for position updates from parent card
   window.addEventListener('message', function(e) {
-    if (e.data && e.data.type === 'myopel-update') {
-      var newLat = e.data.lat, newLon = e.data.lon;
-      marker.setLatLng([newLat, newLon]);
-      map.setView([newLat, newLon], 15);
-    }
+    if (e.source !== parent || !e.data || e.data.type !== 'myopel-update') return;
+    var newLat = Number(e.data.lat), newLon = Number(e.data.lon);
+    if (!Number.isFinite(newLat) || !Number.isFinite(newLon)
+        || newLat < -90 || newLat > 90 || newLon < -180 || newLon > 180) return;
+    marker.setLatLng([newLat, newLon]);
+    map.setView([newLat, newLon], 15);
   });
 <\/script>
 </body>
@@ -988,15 +997,26 @@ class MyOpelCard extends LitElement {
     const plate = this._uniprefix();
     if (!plate) return;
     const tracker = this._hass?.states[`device_tracker.auto_${plate}`];
-    const lat = tracker?.attributes?.latitude;
-    const lon = tracker?.attributes?.longitude;
-    if (!lat || !lon) return;
+    const coords = this._mapCoordinates(tracker);
+    if (!coords) return;
+    const { lat, lon } = coords;
 
     const iframe = this.shadowRoot?.querySelector('.op-map-iframe');
     if (!iframe) return;
 
     if (!iframe.dataset.initialized) {
       // First load: inject full HTML via srcdoc
+      iframe.addEventListener('load', () => {
+        const latestPlate = this._uniprefix();
+        if (!latestPlate) return;
+        const latestTracker = this._hass?.states[`device_tracker.auto_${latestPlate}`];
+        const latest = this._mapCoordinates(latestTracker);
+        if (latest) {
+          iframe.contentWindow?.postMessage({ type: 'myopel-update', ...latest }, '*');
+          this._lastLat = latest.lat;
+          this._lastLon = latest.lon;
+        }
+      }, { once: true });
       iframe.srcdoc = this._getMapHtml(lat, lon);
       iframe.dataset.initialized = '1';
       this._lastLat = lat;
@@ -1017,21 +1037,27 @@ class MyOpelCard extends LitElement {
     if (!plate) return nothing;
 
     const tracker = this._hass?.states[`device_tracker.auto_${plate}`];
-    const lat = tracker?.attributes?.latitude;
-    const lon = tracker?.attributes?.longitude;
+    const coords = this._mapCoordinates(tracker);
     const address = this._uniVal("indirizzo");
     const lastUpdate = this._uniVal("ultimo_aggiornamento_gps");
 
     let fmtDate = null;
     if (lastUpdate) {
       try {
-        fmtDate = new Date(lastUpdate).toLocaleString("it-IT",
-          { day:"2-digit", month:"2-digit", hour:"2-digit", minute:"2-digit" });
-      } catch { fmtDate = lastUpdate; }
+        const date = new Date(lastUpdate);
+        if (!Number.isNaN(date.getTime())) {
+          fmtDate = date.toLocaleString("it-IT", {
+            day:"2-digit", month:"2-digit", hour:"2-digit", minute:"2-digit",
+            timeZone: this._hass?.config?.time_zone,
+          });
+        }
+      } catch { fmtDate = null; }
     }
 
-    const mapContent = (lat && lon)
+    const mapContent = coords
       ? html`<iframe class="op-map-iframe"
+                 title="Posizione GPS del veicolo"
+                 sandbox="allow-scripts allow-popups"
                  frameborder="0" scrolling="no"
                  style="width:100%;height:150px;display:block;border:none;">
              </iframe>`
@@ -1248,11 +1274,14 @@ class MyOpelCard extends LitElement {
       </ha-card>`;
   }
 
-  static getConfigElement() { return document.createElement("myopel-card-editor"); }
   static getStubConfig() {
     return { name:"La mia Opel", vin:"", car_make:"opel", car_model:"corsa", car_year:"2021", car_color:"", tank_capacity:41, plate:"" };
   }
 }
-customElements.define("myopel-card", MyOpelCard);
+if (!customElements.get("myopel-card")) {
+  customElements.define("myopel-card", MyOpelCard);
+}
 window.customCards = window.customCards ?? [];
-window.customCards.push({ type:"myopel-card", name:"MyOpel Card", preview:false, description:"Dashboard MyOpel" });
+if (!window.customCards.some(card => card.type === "myopel-card")) {
+  window.customCards.push({ type:"myopel-card", name:"MyOpel Card", preview:false, description:"Dashboard MyOpel" });
+}

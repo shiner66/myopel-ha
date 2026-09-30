@@ -12,12 +12,16 @@ from pathlib import Path
 import voluptuous as vol
 
 from homeassistant.components.frontend import add_extra_js_url
-from homeassistant.components.http import StaticPathConfig
+try:
+    from homeassistant.components.http import StaticPathConfig
+except ImportError:  # Home Assistant < 2024.7
+    StaticPathConfig = None  # type: ignore[assignment,misc]
 from homeassistant.components.persistent_notification import async_create as pn_create
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, ServiceCall, callback
 from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
+from homeassistant.setup import async_when_setup
 
 from .ack_store import AlertAckStore
 from .alerts import ALERT_CODES
@@ -34,12 +38,14 @@ from .const import (
 from .const import (
     CONF_MIN_TRIP_DISTANCE, CONF_MIN_TRIP_DISTANCE_ENABLED, DEFAULT_MIN_TRIP_DISTANCE,
 )
+from .const import CONF_TIME_OFFSET, DEFAULT_TIME_OFFSET
+from .snapshot import InvalidSnapshotError, normalize_vin, parse_snapshot
 
 _LOGGER = logging.getLogger(__name__)
 
 CONFIG_SCHEMA = cv.config_entry_only_config_schema(DOMAIN)
 
-PLATFORMS = ["sensor"]
+PLATFORMS = ["sensor", "binary_sensor"]
 
 
 def _read_manifest_version() -> str:
@@ -131,6 +137,13 @@ def _compute_scope_alerts(trips: list[dict], ack_store: AlertAckStore | None) ->
 _CARD_JS_URL = f"/myopel/{INTEGRATION_VERSION}/myopel-card.js"
 
 
+async def _async_register_frontend_module(
+    hass: HomeAssistant, _component: str = ""
+) -> None:
+    """Register the card after frontend has initialized its module set."""
+    add_extra_js_url(hass, _CARD_JS_URL)
+
+
 # ── Watchdog file handler ─────────────────────────────────────────────────────
 
 class _TripFileHandler:
@@ -148,7 +161,7 @@ class _TripFileHandler:
     @staticmethod
     def _is_relevant(path: str) -> bool:
         name = os.path.basename(path)
-        return name in ("trips.json", "trips.export") or name.endswith(".myop")
+        return name in ("trips", "trips.json", "trips.export") or name.lower().endswith(".myop")
 
     def dispatch(self, path: str) -> None:
         if self._is_relevant(path):
@@ -191,10 +204,14 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
     registered = hass.data.get("frontend_extra_module_url", {})
     urls = getattr(registered, "urls", set())
     if _CARD_JS_URL not in urls:
-        await hass.http.async_register_static_paths(
-            [StaticPathConfig(_CARD_JS_URL, js_file, False)]
-        )
-        add_extra_js_url(hass, _CARD_JS_URL)
+        if StaticPathConfig is not None and hasattr(hass.http, "async_register_static_paths"):
+            await hass.http.async_register_static_paths(
+                [StaticPathConfig(_CARD_JS_URL, js_file, False)]
+            )
+        else:
+            # HA 2024.1 exposes only the synchronous legacy registration API.
+            hass.http.register_static_path(_CARD_JS_URL, js_file, cache_headers=False)
+        async_when_setup(hass, "frontend", _async_register_frontend_module)
         _LOGGER.debug("MyOpel: card JS registrata su %s", _CARD_JS_URL)
 
     return True
@@ -204,6 +221,28 @@ class _NoFileYet(Exception):
     """Raised when the folder exists but contains no .myop or trips.json — not a fatal error."""
 
 
+async def _async_stop_runtime(hass: HomeAssistant, imap_fetcher, observer) -> None:
+    """Stop background resources created for one config entry."""
+    if imap_fetcher is not None:
+        await imap_fetcher.async_stop()
+    if observer and observer.is_alive():
+        observer.stop()
+        await hass.async_add_executor_job(observer.join)
+        _LOGGER.debug("MyOpel: watchdog fermato")
+
+
+def _migrate_alert_binary_sensor_registry(hass: HomeAssistant, entry: ConfigEntry) -> None:
+    """Remove the legacy sensor-domain registry row before creating the binary sensor."""
+    from homeassistant.helpers import entity_registry as er
+
+    registry = er.async_get(hass)
+    unique_id = f"{entry.entry_id}_last_trip_has_alerts"
+    old_entity_id = registry.async_get_entity_id("sensor", DOMAIN, unique_id)
+    if old_entity_id is not None:
+        registry.async_remove(old_entity_id)
+        _LOGGER.info("MyOpel: rimossa entità legacy %s", old_entity_id)
+
+
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up MyOpel from a config entry."""
     # options can override data for file_path (hot-reload on path change)
@@ -211,89 +250,104 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     scan_interval = entry.options.get(CONF_SCAN_INTERVAL, DEFAULT_SCAN_INTERVAL)
     min_dist_enabled = entry.options.get(CONF_MIN_TRIP_DISTANCE_ENABLED, False)
     min_dist = entry.options.get(CONF_MIN_TRIP_DISTANCE, DEFAULT_MIN_TRIP_DISTANCE) if min_dist_enabled else 0.0
+    time_offset = entry.options.get(
+        CONF_TIME_OFFSET,
+        entry.data.get(CONF_TIME_OFFSET, DEFAULT_TIME_OFFSET),
+    )
 
     ack_store = AlertAckStore(hass, entry.entry_id)
     await ack_store.async_load()
 
-    coordinator = MyOpelCoordinator(hass, file_path, scan_interval, min_dist, ack_store=ack_store)
+    coordinator = MyOpelCoordinator(
+        hass,
+        file_path,
+        scan_interval,
+        min_dist,
+        ack_store=ack_store,
+        expected_vin=entry.unique_id,
+        time_offset=time_offset,
+    )
 
     # ── Watchdog observer ────────────────────────────────────────────────────
     observer = None
-    try:
-        from watchdog.observers import Observer
-
-        folder = Path(file_path)
-        folder.mkdir(parents=True, exist_ok=True)
-
-        handler = _make_watchdog_handler(coordinator)
-        if handler is not None:
-            observer = Observer()
-            observer.schedule(handler, str(folder), recursive=False)
-            observer.start()
-            _LOGGER.debug("MyOpel: watchdog avviato su %s", folder)
-    except Exception as exc:  # noqa: BLE001
-        _LOGGER.warning("MyOpel: watchdog non disponibile, uso solo polling (%s)", exc)
-        observer = None
-
-    # ── IMAP fetcher ─────────────────────────────────────────────────────────
     imap_fetcher = None
-    imap_disabled = entry.options.get(CONF_IMAP_DISABLED, False)
-    # IMAP settings: options take precedence over original data (allows hot-update)
-    imap_server = entry.options.get(CONF_IMAP_SERVER, entry.data.get(CONF_IMAP_SERVER, ""))
-    if not imap_disabled and imap_server:
-        from .imap_fetcher import MyOpelImapFetcher
+    try:
+        try:
+            from watchdog.observers import Observer
 
-        def _get(key, default=None):
-            return entry.options.get(key, entry.data.get(key, default))
+            folder = Path(file_path)
+            folder.mkdir(parents=True, exist_ok=True)
 
-        from .const import DEFAULT_IMAP_PORT, DEFAULT_IMAP_FOLDER, DEFAULT_IMAP_INTERVAL
-        imap_config = {
-            CONF_IMAP_SERVER: imap_server,
-            CONF_IMAP_PORT: _get(CONF_IMAP_PORT, DEFAULT_IMAP_PORT),
-            CONF_IMAP_USERNAME: _get(CONF_IMAP_USERNAME, ""),
-            CONF_IMAP_PASSWORD: _get(CONF_IMAP_PASSWORD, ""),
-            CONF_IMAP_FOLDER: _get(CONF_IMAP_FOLDER, DEFAULT_IMAP_FOLDER),
-            CONF_IMAP_SENDER: _get(CONF_IMAP_SENDER, ""),
-            CONF_IMAP_INTERVAL: _get(CONF_IMAP_INTERVAL, DEFAULT_IMAP_INTERVAL),
-        }
-        imap_fetcher = MyOpelImapFetcher(
-            hass, imap_config, file_path, coordinator,
-            on_no_idle=lambda: pn_create(
-                hass,
-                title="MyOpel – IMAP IDLE non supportato",
-                message=(
-                    f"Il server IMAP **{imap_server}** non supporta "
-                    "IMAP IDLE (RFC 2177).\n\n"
-                    "L'integrazione continuerà a controllare la posta ogni "
-                    f"{imap_config.get(CONF_IMAP_INTERVAL, 300)} secondi tramite polling.\n\n"
-                    "Per ricevere aggiornamenti in tempo reale considera di usare Gmail, "
-                    "iCloud o un altro provider che supporta IDLE."
+            handler = _make_watchdog_handler(coordinator)
+            if handler is not None:
+                observer = Observer()
+                observer.schedule(handler, str(folder), recursive=False)
+                observer.start()
+                _LOGGER.debug("MyOpel: watchdog avviato su %s", folder)
+        except Exception as exc:  # noqa: BLE001
+            _LOGGER.warning("MyOpel: watchdog non disponibile, uso solo polling (%s)", exc)
+            observer = None
+
+        # ── IMAP fetcher ─────────────────────────────────────────────────────
+        imap_disabled = entry.options.get(CONF_IMAP_DISABLED, False)
+        imap_server = entry.options.get(CONF_IMAP_SERVER, entry.data.get(CONF_IMAP_SERVER, ""))
+        if not imap_disabled and imap_server:
+            from .imap_fetcher import MyOpelImapFetcher
+
+            def _get(key, default=None):
+                return entry.options.get(key, entry.data.get(key, default))
+
+            from .const import DEFAULT_IMAP_PORT, DEFAULT_IMAP_FOLDER, DEFAULT_IMAP_INTERVAL
+            imap_config = {
+                CONF_IMAP_SERVER: imap_server,
+                CONF_IMAP_PORT: _get(CONF_IMAP_PORT, DEFAULT_IMAP_PORT),
+                CONF_IMAP_USERNAME: _get(CONF_IMAP_USERNAME, ""),
+                CONF_IMAP_PASSWORD: _get(CONF_IMAP_PASSWORD, ""),
+                CONF_IMAP_FOLDER: _get(CONF_IMAP_FOLDER, DEFAULT_IMAP_FOLDER),
+                CONF_IMAP_SENDER: _get(CONF_IMAP_SENDER, ""),
+                CONF_IMAP_INTERVAL: _get(CONF_IMAP_INTERVAL, DEFAULT_IMAP_INTERVAL),
+            }
+            imap_fetcher = MyOpelImapFetcher(
+                hass, imap_config, file_path, coordinator,
+                on_no_idle=lambda: pn_create(
+                    hass,
+                    title="MyOpel – IMAP IDLE non supportato",
+                    message=(
+                        f"Il server IMAP **{imap_server}** non supporta "
+                        "IMAP IDLE (RFC 2177).\n\n"
+                        "L'integrazione continuerà a controllare la posta ogni "
+                        f"{imap_config.get(CONF_IMAP_INTERVAL, 300)} secondi tramite polling.\n\n"
+                        "Per ricevere aggiornamenti in tempo reale considera di usare Gmail, "
+                        "iCloud o un altro provider che supporta IDLE."
+                    ),
+                    notification_id="myopel_imap_no_idle",
                 ),
-                notification_id="myopel_imap_no_idle",
-            ),
-        )
-        await imap_fetcher.async_start()
+            )
+            await imap_fetcher.async_start()
 
-    # First refresh: tolerates empty folder (returns {}) so setup never fails
-    await coordinator.async_config_entry_first_refresh()
+        await coordinator.async_config_entry_first_refresh()
 
-    hass.data.setdefault(DOMAIN, {})[entry.entry_id] = {
-        "coordinator": coordinator,
-        "imap_fetcher": imap_fetcher,
-        "observer": observer,
-        "ack_store": ack_store,
-    }
+        hass.data.setdefault(DOMAIN, {})[entry.entry_id] = {
+            "coordinator": coordinator,
+            "imap_fetcher": imap_fetcher,
+            "observer": observer,
+            "ack_store": ack_store,
+        }
 
-    # If the entry was created before we had a real VIN (folder was empty),
-    # register a one-shot listener that fixes title and unique_id on first real data.
-    if entry.unique_id is None or "unknown" in entry.title.lower():
-        _register_vin_updater(hass, entry, coordinator)
-
-    _async_register_services(hass)
-
-    await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
-    entry.async_on_unload(entry.add_update_listener(async_reload_entry))
-    return True
+        _async_register_services(hass)
+        _migrate_alert_binary_sensor_registry(hass, entry)
+        await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
+        entry.async_on_unload(entry.add_update_listener(async_reload_entry))
+        if entry.unique_id is None or "unknown" in entry.title.lower():
+            _register_vin_updater(hass, entry, coordinator)
+        return True
+    except (asyncio.CancelledError, Exception):
+        hass.data.get(DOMAIN, {}).pop(entry.entry_id, None)
+        try:
+            await _async_stop_runtime(hass, imap_fetcher, observer)
+        except Exception:  # Preserve the original setup error or cancellation.
+            _LOGGER.exception("MyOpel: errore durante il rollback del setup")
+        raise
 
 
 # ── Services ─────────────────────────────────────────────────────────────────
@@ -480,29 +534,38 @@ def _register_vin_updater(hass: HomeAssistant, entry: ConfigEntry, coordinator) 
             unique_id=vin,
         )
         _LOGGER.info("MyOpel: entry aggiornata con VIN reale %s", vin)
-        unsub()
+        _unsubscribe()
 
     unsub = coordinator.async_add_listener(_on_update)
+    subscribed = True
+
+    @callback
+    def _unsubscribe() -> None:
+        nonlocal subscribed
+        if subscribed:
+            subscribed = False
+            unsub()
+
+    entry.async_on_unload(_unsubscribe)
+    # Copre il caso in cui il VIN sia arrivato mentre le piattaforme venivano
+    # inizializzate, prima che il listener fosse registrato.
+    _on_update()
 
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Unload a config entry."""
     entry_data = hass.data[DOMAIN].get(entry.entry_id, {})
-
-    imap_fetcher = entry_data.get("imap_fetcher")
-    if imap_fetcher:
-        imap_fetcher.async_stop()
-
-    observer = entry_data.get("observer")
-    if observer and observer.is_alive():
-        observer.stop()
-        await hass.async_add_executor_job(observer.join)
-        _LOGGER.debug("MyOpel: watchdog fermato")
-
     unload_ok = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
-    if unload_ok:
-        hass.data[DOMAIN].pop(entry.entry_id)
-    return unload_ok
+    if not unload_ok:
+        return False
+
+    await _async_stop_runtime(
+        hass,
+        entry_data.get("imap_fetcher"),
+        entry_data.get("observer"),
+    )
+    hass.data[DOMAIN].pop(entry.entry_id)
+    return True
 
 
 async def async_reload_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
@@ -522,6 +585,8 @@ class MyOpelCoordinator(DataUpdateCoordinator):
         scan_interval: int,
         min_trip_distance: float = 0.0,
         ack_store: AlertAckStore | None = None,
+        expected_vin: str | None = None,
+        time_offset: int = DEFAULT_TIME_OFFSET,
     ) -> None:
         super().__init__(
             hass,
@@ -532,6 +597,11 @@ class MyOpelCoordinator(DataUpdateCoordinator):
         self.file_path = file_path
         self.min_trip_distance = min_trip_distance
         self.ack_store = ack_store
+        self.expected_vin = normalize_vin(expected_vin)
+        try:
+            self.time_offset = int(time_offset)
+        except (TypeError, ValueError):
+            self.time_offset = DEFAULT_TIME_OFFSET
 
     async def _async_update_data(self) -> dict:
         """Read and parse the trip data file."""
@@ -554,29 +624,63 @@ class MyOpelCoordinator(DataUpdateCoordinator):
         # makes the result depend on a filesystem mtime race — producing the
         # oscillating sensor values reported by users. Merging is
         # deterministic and loss-free.
-        candidates = list(folder.glob("*.myop")) + list(folder.glob("trips.json")) + (
-            [folder / "trips.export"] if (folder / "trips.export").is_file() else []
+        candidates = [
+            path
+            for path in folder.iterdir()
+            if path.is_file() and path.suffix.lower() == ".myop"
+        ]
+        candidates.extend(folder.glob("trips.json"))
+        candidates.extend(
+            candidate
+            for candidate in (folder / "trips", folder / "trips.export")
+            if candidate.is_file()
         )
         if not candidates:
             raise _NoFileYet
         # Oldest → newest so later files overwrite earlier ones on trip-id collision
-        candidates.sort(key=lambda p: p.stat().st_mtime)
-
-        vin = "unknown"
-        merged_trips: dict = {}
+        dated_candidates: list[tuple[float, Path]] = []
         for path in candidates:
             try:
-                raw = json.loads(path.read_text(encoding="utf-8"))
-            except (OSError, json.JSONDecodeError) as err:
+                dated_candidates.append((path.stat().st_mtime, path))
+            except OSError as err:
+                _LOGGER.warning("MyOpel: impossibile esaminare %s (%s), ignoro", path.name, err)
+        dated_candidates.sort(key=lambda item: item[0])
+
+        snapshots: list[tuple[str, list[dict], Path]] = []
+        for _, path in dated_candidates:
+            try:
+                snapshot_vin, snapshot_trips = parse_snapshot(
+                    path.read_text(encoding="utf-8")
+                )
+            except (
+                OSError,
+                json.JSONDecodeError,
+                UnicodeDecodeError,
+                InvalidSnapshotError,
+            ) as err:
                 _LOGGER.warning("MyOpel: impossibile leggere %s (%s), ignoro", path.name, err)
                 continue
-            if not raw:
+            snapshots.append((snapshot_vin, snapshot_trips, path))
+
+        if not snapshots:
+            raise UpdateFailed("No valid MyOpel snapshots found")
+
+        vin = self.expected_vin or snapshots[-1][0]
+        if not any(snapshot_vin == vin for snapshot_vin, _, _ in snapshots):
+            raise UpdateFailed(f"No snapshots found for configured VIN {vin}")
+        self.expected_vin = vin
+
+        merged_trips: dict = {}
+        for snapshot_vin, snapshot_trips, path in snapshots:
+            if snapshot_vin != vin:
+                _LOGGER.warning(
+                    "MyOpel: snapshot %s per VIN %s ignorato (entry VIN %s)",
+                    path.name,
+                    snapshot_vin,
+                    vin,
+                )
                 continue
-            vehicle = raw[0]
-            v = vehicle.get("vin")
-            if v:
-                vin = v
-            for t in vehicle.get("trips", []):
+            for t in snapshot_trips:
                 tid = t.get("id")
                 if tid is None:
                     continue
@@ -584,7 +688,7 @@ class MyOpelCoordinator(DataUpdateCoordinator):
 
         trips = list(merged_trips.values())
         _LOGGER.debug(
-            "MyOpel: unione di %d file → %d trip distinti", len(candidates), len(trips)
+            "MyOpel: unione di %d file → %d trip distinti", len(snapshots), len(trips)
         )
 
         if not trips:
@@ -708,20 +812,31 @@ class MyOpelCoordinator(DataUpdateCoordinator):
         )
 
         # ── Monthly aggregates (current calendar month) ─────────────────────
-        now_utc = datetime.now(tz=timezone.utc)
-        current_year = now_utc.year
-        current_month = now_utc.month
+        trip_timezone = timezone(timedelta(hours=self.time_offset))
+        now_local = datetime.now(tz=trip_timezone)
+        current_year = now_local.year
+        current_month = now_local.month
+
+        def _trip_end_datetime(trip: dict) -> datetime | None:
+            raw_date = (trip.get("end") or {}).get("date")
+            if not isinstance(raw_date, str) or not raw_date:
+                return None
+            try:
+                marked_as_utc = raw_date.endswith("Z")
+                parsed = datetime.fromisoformat(
+                    raw_date[:-1] if marked_as_utc else raw_date
+                )
+            except ValueError:
+                return None
+            # Stellantis exports local wall-clock values with a misleading Z.
+            if marked_as_utc or parsed.tzinfo is None:
+                return parsed.replace(tzinfo=trip_timezone)
+            return parsed.astimezone(trip_timezone)
 
         monthly_trips: list[dict] = []
         for t in filtered_trips:
-            raw_date = (t.get("end") or {}).get("date")
-            if not raw_date:
-                continue
-            try:
-                dt = datetime.fromisoformat(raw_date.rstrip("Z")).replace(
-                    tzinfo=timezone.utc
-                )
-            except ValueError:
+            dt = _trip_end_datetime(t)
+            if dt is None:
                 continue
             if dt.year == current_year and dt.month == current_month:
                 monthly_trips.append(t)
@@ -757,19 +872,13 @@ class MyOpelCoordinator(DataUpdateCoordinator):
         # Scope aggregations for alerts across today / month / total
         today_trips: list[dict] = []
         for t in filtered_trips:
-            raw_date = (t.get("end") or {}).get("date")
-            if not raw_date:
-                continue
-            try:
-                dt = datetime.fromisoformat(raw_date.rstrip("Z")).replace(
-                    tzinfo=timezone.utc
-                )
-            except ValueError:
+            dt = _trip_end_datetime(t)
+            if dt is None:
                 continue
             if (
                 dt.year == current_year
                 and dt.month == current_month
-                and dt.day == now_utc.day
+                and dt.day == now_local.day
             ):
                 today_trips.append(t)
 

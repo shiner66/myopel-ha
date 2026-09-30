@@ -8,7 +8,7 @@ Integrazione per Home Assistant che legge i file esportati dall'app **MyOpel** e
 - Statistiche per **ultimo viaggio**, **mese corrente**, **totali** e **dall'ultimo rifornimento**
 - **Alert attivi** (binary sensor) dell'ultimo viaggio
 - **Download automatico** del file di dati via IMAP (opzionale)
-- **Lovelace card** con mappa GPS, immagine 3D interattiva e rotazione 360° con inerzia
+- **Lovelace card** con mappa GPS OpenStreetMap (strade visibili, nessuna API key), immagine 3D interattiva e rotazione 360° con inerzia
 - **Supporto multi-veicolo** tramite VIN
 - **Aggiornamento in tempo reale** via watchdog (inotify) non appena il file viene scritto
 - **Compatibile con iOS Shortcuts**: accetta file `trips`, `trips.json` e `.myop`
@@ -103,7 +103,7 @@ Per la **vista 360° interattiva**, clicca il badge `360°` in alto a destra nel
 ### Integrazione con UnipolSai
 
 Se hai anche l'integrazione UnipolSai, aggiungi il campo `plate` con la targa del veicolo. La card mostrerà automaticamente:
-- Mini mappa GPS con posizione attuale
+- Mini mappa GPS OpenStreetMap con posizione attuale e nomi delle strade, senza API key
 - Indirizzo geocodificato
 - Data/ora ultimo aggiornamento GPS
 

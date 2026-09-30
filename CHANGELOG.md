@@ -4,7 +4,46 @@ Tutte le modifiche rilevanti a questa integrazione sono documentate qui.
 
 ---
 
-## [Unreleased]
+## [1.4.4] – 2026-09-30
+
+### Correzioni
+- Sostituito l'endpoint CARTO che mostrava `API KEY REQUIRED` con le tile
+  standard OpenStreetMap: nessuna chiave richiesta, nomi di strade e località
+  visibili e attribuzione corretta.
+- La mini mappa valida anche coordinate pari a zero, isola Leaflet in un iframe
+  sandboxed, convalida i messaggi di aggiornamento e recupera gli update GPS
+  arrivati durante il caricamento; corretti inoltre timestamp non validi e
+  fuso orario del frontend.
+- Il binary sensor *"Ultimo viaggio – Alert presenti"* viene ora pubblicato
+  correttamente come `binary_sensor` e l'eventuale entità legacy nel dominio
+  `sensor` viene rimossa durante la migrazione.
+  Le automazioni che usavano il precedente entity ID `sensor.*` devono essere
+  aggiornate al nuovo entity ID nel dominio `binary_sensor`.
+- Il download IMAP non marca più come lette le email estranee: unisce le
+  ricerche recenti/non lette, usa `BODY.PEEK`, valida dimensione, JSON e VIN e
+  sostituisce lo snapshot in modo atomico prima di eliminare i file obsoleti.
+- Serializzati i fetch IMAP concorrenti; IDLE reagisce subito alle nuove email
+  e si arresta senza bloccare il loop di Home Assistant o lasciare thread attivi.
+- Gli snapshot malformati o appartenenti a un altro VIN non contaminano più le
+  statistiche; aggiunto il supporto effettivo al file `trips` senza estensione
+  e ai suffissi `.MYOP` maiuscoli.
+- Normalizzati percorso e campi IMAP salvati dalle Opzioni; gli aggregati Oggi
+  e Mese rispettano l'offset orario configurato.
+- Pulizia completa di watchdog, IMAP e listener se setup/unload falliscono;
+  quando una cartella inizialmente vuota rivela il VIN, l'entry viene ricaricata
+  per ricreare entità e device con gli identificativi corretti.
+- Registrazione della card compatibile con la vecchia API static path di Home
+  Assistant e con `StaticPathConfig` nelle versioni recenti; la registrazione
+  frontend viene rinviata finché il frontend è disponibile, preservando le
+  installazioni headless.
+
+### Modifiche
+- Fissata la dipendenza frontend Lit alla versione `3.2.1`; protetta la
+  registrazione della custom card da caricamenti duplicati.
+
+---
+
+## [1.4.1] – 2026-04-17
 
 ### Aggiunte
 - **Acknowledgment degli alert**: ora è possibile "confermare" gli alert

@@ -6,7 +6,7 @@ Integrazione per monitorare il tuo veicolo **Opel / Vauxhall** tramite i dati es
 
 - **30+ sensori**: chilometraggio, carburante, consumo, velocità media, costi
 - Statistiche per **ultimo viaggio**, **mese corrente**, **totali** e **dall'ultimo rifornimento**
-- **Lovelace card** con immagine 3D interattiva, rotazione 360° con inerzia e mappa GPS
+- **Lovelace card** con immagine 3D interattiva, rotazione 360° con inerzia e mappa GPS OpenStreetMap senza API key
 - **Aggiornamento in tempo reale** via watchdog — nessun polling necessario
 - **Download automatico** tramite IMAP (opzionale)
 - Formati accettati: `trips.json`, `trips` (senza estensione — iOS Shortcuts), `.myop` (legacy)

@@ -4,6 +4,27 @@ Tutte le modifiche rilevanti a questa integrazione sono documentate qui.
 
 ---
 
+## [1.4.5] – 2026-09-30
+
+### Correzioni
+- Sostituito il server pubblico `tile.openstreetmap.org`, che può rifiutare le
+  richieste del frontend Home Assistant con `403` per la propria tile usage
+  policy, con la mappa vettoriale OpenFreeMap in stile Liberty: nessuna API key,
+  nomi delle strade visibili e attribuzione corretta. MapLibre GL JS `5.24.0`
+  e il relativo adapter Leaflet sono inclusi nell'integrazione; se WebGL o
+  OpenFreeMap non sono disponibili, la card usa OpenTopoMap come servizio di
+  riserva e mostra un errore leggibile se anche questo non risponde.
+- Ripubblicata la correzione della mappa con una nuova versione per risolvere
+  la collisione della `1.4.4`: alcuni pacchetti o installazioni da `main`
+  esponevano già lo stesso numero di versione pur contenendo ancora le tile
+  CARTO, impedendo a HACS e al browser di rilevare l'aggiornamento.
+- La card ricava ora la propria versione dall'URL statico versionato e la mostra
+  nella console del browser. Se trova già registrata una card legacy o di una
+  versione diversa, avvisa che occorre un hard refresh o l'arresto forzato
+  della Companion App e segnala di controllare eventuali risorse duplicate.
+
+---
+
 ## [1.4.4] – 2026-09-30
 
 ### Correzioni

@@ -1,10 +1,46 @@
 import { LitElement, html, css, nothing } from "https://unpkg.com/lit@3.2.1/index.js?module";
 
-const MAP_TILE_URL = "https://tile.openstreetmap.org/{z}/{x}/{y}.png";
-const MAP_ATTRIBUTION =
-  '&copy; <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener noreferrer">OpenStreetMap</a> contributors';
+const CARD_MODULE_URL = import.meta.url;
+const CARD_VERSION = (() => {
+  try {
+    const match = new URL(CARD_MODULE_URL).pathname.match(
+      /\/myopel\/([^/]+)\/myopel-card\.js$/,
+    );
+    return match ? decodeURIComponent(match[1]) : "unknown";
+  } catch {
+    return "unknown";
+  }
+})();
+const MAPLIBRE_VERSION = "5.24.0";
+const MAPLIBRE_LEAFLET_VERSION = "0.1.4";
+const MAPLIBRE_SCRIPT_URL = new URL(
+  `./vendor/maplibre-gl-${MAPLIBRE_VERSION}/maplibre-gl.js`,
+  CARD_MODULE_URL,
+).href;
+const MAPLIBRE_STYLESHEET_URL = new URL(
+  `./vendor/maplibre-gl-${MAPLIBRE_VERSION}/maplibre-gl.css`,
+  CARD_MODULE_URL,
+).href;
+const MAPLIBRE_LEAFLET_SCRIPT_URL = new URL(
+  `./vendor/maplibre-gl-leaflet-${MAPLIBRE_LEAFLET_VERSION}/leaflet-maplibre-gl.js`,
+  CARD_MODULE_URL,
+).href;
+const MAP_STYLE_URL = "https://tiles.openfreemap.org/styles/liberty";
+const OPENFREEMAP_ATTRIBUTION =
+  '<a href="https://openfreemap.org/" target="_blank" rel="noopener noreferrer">OpenFreeMap</a> ' +
+  '<a href="https://www.openmaptiles.org/" target="_blank" rel="noopener noreferrer">&copy; OpenMapTiles</a> ' +
+  'Data from <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener noreferrer">OpenStreetMap</a>';
+const MAP_FALLBACK = Object.freeze({
+  name: "OpenTopoMap",
+  url: "https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png",
+  maxNativeZoom: 17,
+  attribution:
+    'Map data &copy; <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener noreferrer">OpenStreetMap</a> contributors, SRTM | Map style &copy; <a href="https://opentopomap.org/" target="_blank" rel="noopener noreferrer">OpenTopoMap</a> (<a href="https://creativecommons.org/licenses/by-sa/3.0/" target="_blank" rel="noopener noreferrer">CC-BY-SA</a>)',
+});
 
 class MyOpelCard extends LitElement {
+  static myopelCardVersion = CARD_VERSION;
+
   static properties = {
     _hass:         { state: true },
     _config:       { state: true },
@@ -374,7 +410,7 @@ class MyOpelCard extends LitElement {
     .op-bar-fill.warn { background: var(--op-yellow); }
     .op-bar-fill.crit { background: var(--op-red); box-shadow: 0 0 8px rgba(227,0,27,0.4); }
 
-    /* ── Mini map (Leaflet via iframe) ── */
+    /* ── Mini map (Leaflet + MapLibre via iframe) ── */
     .op-map-wrap {
       margin: 12px 16px 0;
       border-radius: 12px;
@@ -926,7 +962,7 @@ class MyOpelCard extends LitElement {
     `;
   }
 
-  // ── Leaflet map via iframe (bypass shadow DOM limitations) ───────────────
+  // ── Leaflet + MapLibre map via iframe (bypass shadow DOM limitations) ──────
   _getMapHtml(lat, lon) {
     return `<!DOCTYPE html>
 <html>
@@ -935,29 +971,56 @@ class MyOpelCard extends LitElement {
 <style>
   * { margin:0; padding:0; box-sizing:border-box; }
   html, body, #map { width:100%; height:100%; background:#e5e3df; }
+  body { position:relative; overflow:hidden; }
   .leaflet-container { background:#e5e3df !important; }
   .leaflet-control-attribution {
     background:rgba(255,255,255,.86) !important;
     font:9px/1.2 Arial,sans-serif !important;
+    max-width:100%;
+  }
+  #map-error {
+    position:absolute; inset:0; z-index:1000; display:none;
+    align-items:center; justify-content:center; padding:18px;
+    background:rgba(24,24,27,.92); color:#f4f4f5;
+    font:600 12px/1.45 Arial,sans-serif; text-align:center;
   }
 </style>
 <link rel="stylesheet"
-  href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
+  href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css"
+  onerror="window.myopelLeafletCssFailed=true">
+<link rel="stylesheet" href=${JSON.stringify(MAPLIBRE_STYLESHEET_URL)}
+  onerror="window.myopelMapLibreCssFailed=true">
 </head>
 <body>
 <div id="map"></div>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"><\/script>
+<div id="map-error" role="alert"></div>
 <script>
-  var map = L.map('map', {
-    zoomControl: false, attributionControl: true,
-    dragging: false, scrollWheelZoom: false,
-    doubleClickZoom: false, touchZoom: false, keyboard: false
-  });
-
-  L.tileLayer(
-    ${JSON.stringify(MAP_TILE_URL)},
-    { maxZoom: 19, attribution: ${JSON.stringify(MAP_ATTRIBUTION)} }
-  ).addTo(map);
+  function showMapError(message) {
+    var errorElement = document.getElementById('map-error');
+    if (!errorElement) return;
+    errorElement.textContent = message || 'Mappa non disponibile.';
+    errorElement.style.display = 'flex';
+  }
+  function hideMapError() {
+    var errorElement = document.getElementById('map-error');
+    if (errorElement) errorElement.style.display = 'none';
+  }
+<\/script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"
+  onerror="showMapError('Impossibile caricare Leaflet.')"><\/script>
+<script src=${JSON.stringify(MAPLIBRE_SCRIPT_URL)}
+  onerror="window.myopelMapLibreFailed=true"><\/script>
+<script src=${JSON.stringify(MAPLIBRE_LEAFLET_SCRIPT_URL)}
+  onerror="window.myopelMapLibreAdapterFailed=true"><\/script>
+<script>
+  var map = null;
+  var marker = null;
+  var vectorLayer = null;
+  var vectorLoaded = false;
+  var vectorErrors = 0;
+  var vectorTimeout = null;
+  var fallbackStarted = false;
+  var fallbackTimeout = null;
 
   var pinSvg = '<svg width="34" height="44" viewBox="0 0 34 44" xmlns="http://www.w3.org/2000/svg">'
     + '<defs><filter id="g"><feDropShadow dx="0" dy="2" stdDeviation="3" flood-color="rgba(0,0,0,.6)"/>'
@@ -967,14 +1030,93 @@ class MyOpelCard extends LitElement {
     + '<circle cx="17" cy="15" r="6" fill="white"/>'
     + '<circle cx="17" cy="15" r="3" fill="#e3001b"/></svg>';
 
-  var icon = L.divIcon({
-    className: '', html: pinSvg,
-    iconSize: [34, 44], iconAnchor: [17, 44]
-  });
-
   var lat = ${lat}, lon = ${lon};
-  var marker = L.marker([lat, lon], { icon: icon }).addTo(map);
-  map.setView([lat, lon], 15);
+  if (!window.L || window.myopelLeafletCssFailed) {
+    showMapError('Mappa non disponibile. Impossibile caricare Leaflet.');
+  } else {
+    map = L.map('map', {
+      zoomControl: false, attributionControl: true,
+      dragging: false, scrollWheelZoom: false,
+      doubleClickZoom: false, touchZoom: false, keyboard: false
+    });
+
+    var icon = L.divIcon({
+      className: '', html: pinSvg,
+      iconSize: [34, 44], iconAnchor: [17, 44]
+    });
+    marker = L.marker([lat, lon], { icon: icon }).addTo(map);
+    map.setView([lat, lon], 15);
+
+    function useFallback(reason) {
+      if (fallbackStarted) return;
+      fallbackStarted = true;
+      window.clearTimeout(vectorTimeout);
+      console.warn('[MyOpel] OpenFreeMap non disponibile (' + reason + '); uso OpenTopoMap.');
+      if (vectorLayer && map.hasLayer(vectorLayer)) map.removeLayer(vectorLayer);
+
+      var fallback = ${JSON.stringify(MAP_FALLBACK)};
+      var fallbackErrors = 0;
+      var fallbackLoaded = false;
+      var fallbackLayer = L.tileLayer(fallback.url, {
+        maxZoom: 19,
+        maxNativeZoom: fallback.maxNativeZoom,
+        attribution: fallback.attribution,
+        updateWhenIdle: true,
+        keepBuffer: 1
+      });
+      fallbackLayer.on('tileload', function() {
+        fallbackLoaded = true;
+        window.clearTimeout(fallbackTimeout);
+        hideMapError();
+      });
+      fallbackLayer.on('tileerror', function() {
+        if (fallbackLoaded) return;
+        fallbackErrors += 1;
+        if (fallbackErrors >= 2) {
+          showMapError('Mappa non disponibile. Anche il servizio di riserva non risponde.');
+        }
+      });
+      fallbackLayer.addTo(map);
+      fallbackTimeout = window.setTimeout(function() {
+        showMapError('Mappa non disponibile. Anche il servizio di riserva non risponde.');
+      }, 12000);
+    }
+
+    if (window.myopelMapLibreFailed || window.myopelMapLibreCssFailed
+        || window.myopelMapLibreAdapterFailed
+        || !window.maplibregl || typeof L.maplibreGL !== 'function') {
+      useFallback('dipendenze non caricate');
+    } else {
+      try {
+        vectorLayer = L.maplibreGL({
+          style: ${JSON.stringify(MAP_STYLE_URL)},
+          interactive: false,
+          attributionControl: {
+            customAttribution: ${JSON.stringify(OPENFREEMAP_ATTRIBUTION)}
+          }
+        }).addTo(map);
+        var glMap = vectorLayer.getMaplibreMap();
+        glMap.on('load', function() {
+          vectorLoaded = true;
+          window.clearTimeout(vectorTimeout);
+          hideMapError();
+        });
+        glMap.on('error', function(event) {
+          var detail = event && event.error ? event.error.message : 'errore sconosciuto';
+          console.error('[MyOpel] Errore OpenFreeMap:', detail);
+          if (vectorLoaded || fallbackStarted) return;
+          vectorErrors += 1;
+          if (vectorErrors >= 2) useFallback('errori durante il caricamento');
+        });
+        vectorTimeout = window.setTimeout(function() {
+          if (!vectorLoaded) useFallback('timeout');
+        }, 12000);
+      } catch (error) {
+        console.error('[MyOpel] Impossibile inizializzare OpenFreeMap:', error);
+        useFallback('inizializzazione non riuscita');
+      }
+    }
+  }
 
   // Listen for position updates from parent card
   window.addEventListener('message', function(e) {
@@ -982,6 +1124,7 @@ class MyOpelCard extends LitElement {
     var newLat = Number(e.data.lat), newLon = Number(e.data.lon);
     if (!Number.isFinite(newLat) || !Number.isFinite(newLon)
         || newLat < -90 || newLat > 90 || newLon < -180 || newLon > 180) return;
+    if (!map || !marker) return;
     marker.setLatLng([newLat, newLon]);
     map.setView([newLat, newLon], 15);
   });
@@ -1278,9 +1421,23 @@ class MyOpelCard extends LitElement {
     return { name:"La mia Opel", vin:"", car_make:"opel", car_model:"corsa", car_year:"2021", car_color:"", tank_capacity:41, plate:"" };
   }
 }
-if (!customElements.get("myopel-card")) {
+const registeredMyOpelCard = customElements.get("myopel-card");
+if (!registeredMyOpelCard) {
   customElements.define("myopel-card", MyOpelCard);
+} else {
+  const registeredVersion = registeredMyOpelCard.myopelCardVersion;
+  if (!registeredVersion || registeredVersion !== CARD_VERSION) {
+    const versionLabel = registeredVersion
+      ? `v${registeredVersion}`
+      : "legacy (versione sconosciuta)";
+    console.warn(
+      `[MyOpel] myopel-card ${versionLabel} è già registrata; il modulo v${CARD_VERSION} ` +
+        "non può sostituirla nella pagina corrente. Esegui un hard refresh del browser " +
+        "o forza l'arresto dell'app e rimuovi eventuali risorse Lovelace duplicate.",
+    );
+  }
 }
+console.info(`[MyOpel] myopel-card v${CARD_VERSION} caricata da ${CARD_MODULE_URL}`);
 window.customCards = window.customCards ?? [];
 if (!window.customCards.some(card => card.type === "myopel-card")) {
   window.customCards.push({ type:"myopel-card", name:"MyOpel Card", preview:false, description:"Dashboard MyOpel" });

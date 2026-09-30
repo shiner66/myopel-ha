@@ -134,7 +134,35 @@ def _compute_scope_alerts(trips: list[dict], ack_store: AlertAckStore | None) ->
     }
 
 
+_FRONTEND_PATH = Path(__file__).with_name("frontend")
 _CARD_JS_URL = f"/myopel/{INTEGRATION_VERSION}/myopel-card.js"
+_MAPLIBRE_VERSION = "5.24.0"
+_MAPLIBRE_LEAFLET_VERSION = "0.1.4"
+_VENDOR_URL = f"/myopel/{INTEGRATION_VERSION}/vendor"
+_STATIC_ASSETS = (
+    (_CARD_JS_URL, _FRONTEND_PATH / "myopel-card.js"),
+    (
+        f"{_VENDOR_URL}/maplibre-gl-{_MAPLIBRE_VERSION}/maplibre-gl.js",
+        _FRONTEND_PATH
+        / "vendor"
+        / f"maplibre-gl-{_MAPLIBRE_VERSION}"
+        / "maplibre-gl.js",
+    ),
+    (
+        f"{_VENDOR_URL}/maplibre-gl-{_MAPLIBRE_VERSION}/maplibre-gl.css",
+        _FRONTEND_PATH
+        / "vendor"
+        / f"maplibre-gl-{_MAPLIBRE_VERSION}"
+        / "maplibre-gl.css",
+    ),
+    (
+        f"{_VENDOR_URL}/maplibre-gl-leaflet-{_MAPLIBRE_LEAFLET_VERSION}/leaflet-maplibre-gl.js",
+        _FRONTEND_PATH
+        / "vendor"
+        / f"maplibre-gl-leaflet-{_MAPLIBRE_LEAFLET_VERSION}"
+        / "leaflet-maplibre-gl.js",
+    ),
+)
 
 
 async def _async_register_frontend_module(
@@ -199,20 +227,25 @@ def _make_watchdog_handler(coordinator: "MyOpelCoordinator"):
 # ── Setup / Teardown ──────────────────────────────────────────────────────────
 
 async def async_setup(hass: HomeAssistant, config: dict) -> bool:
-    """Register Lovelace card JS and visual3D proxy endpoint."""
-    js_file = os.path.join(os.path.dirname(__file__), "frontend", "myopel-card.js")
+    """Register the Lovelace card and its vendored frontend dependencies."""
     registered = hass.data.get("frontend_extra_module_url", {})
     urls = getattr(registered, "urls", set())
     if _CARD_JS_URL not in urls:
         if StaticPathConfig is not None and hasattr(hass.http, "async_register_static_paths"):
             await hass.http.async_register_static_paths(
-                [StaticPathConfig(_CARD_JS_URL, js_file, False)]
+                [
+                    StaticPathConfig(url, str(path), False)
+                    for url, path in _STATIC_ASSETS
+                ]
             )
         else:
             # HA 2024.1 exposes only the synchronous legacy registration API.
-            hass.http.register_static_path(_CARD_JS_URL, js_file, cache_headers=False)
+            for url, path in _STATIC_ASSETS:
+                hass.http.register_static_path(url, str(path), cache_headers=False)
         async_when_setup(hass, "frontend", _async_register_frontend_module)
-        _LOGGER.debug("MyOpel: card JS registrata su %s", _CARD_JS_URL)
+        _LOGGER.debug(
+            "MyOpel: card e dipendenze frontend registrate su %s", _CARD_JS_URL
+        )
 
     return True
 
